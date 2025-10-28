@@ -102,6 +102,7 @@ class WorkspaceApp {
     this.rowElements = new Map();
     this.unsubscribe = [];
     this.defaultTerminals = DEFAULT_TERMINALS;
+    this.hasRestoredWorkspaces = false;
     this.environments = [];
     this.activeEnvironmentName = "";
 
@@ -297,6 +298,64 @@ class WorkspaceApp {
     this.updateActiveRowHighlight();
   }
 
+  async restoreWorkspacesFromStore() {
+    let savedWorkspaces;
+    try {
+      savedWorkspaces = await this.terminalAPI.listSavedWorkspaces();
+    } catch (error) {
+      console.warn("Failed to restore workspace terminals", error);
+      return;
+    }
+
+    if (!Array.isArray(savedWorkspaces)) {
+      return;
+    }
+
+    for (const entry of savedWorkspaces) {
+      const workspace = this.workspaces.find((item) => item.path === entry.workspacePath);
+      if (!workspace) {
+        continue;
+      }
+
+      await this.openWorkspaceTab(workspace, { savedState: entry });
+      const workspaceState = this.openWorkspaces.get(workspace.path);
+      if (!workspaceState) {
+        continue;
+      }
+
+      const terminals = entry.terminals ?? {};
+      const createdTerminals = [];
+      for (const [slot, terminalState] of Object.entries(terminals)) {
+        const record = workspaceState.terminals.get(slot);
+        if (!record) {
+          continue;
+        }
+        record.quickCommandExecuted = Boolean(terminalState.quickCommandExecuted);
+        record.savedHistory = terminalState.history ?? "";
+        record.lastExitCode = terminalState.lastExitCode ?? null;
+        record.lastSignal = terminalState.lastSignal ?? null;
+        const shouldAutoLaunch = record.quickCommandExecuted || (record.savedHistory && record.savedHistory.length > 0);
+        if (shouldAutoLaunch) {
+          const created = await this.createTerminalForRecord(workspaceState, record);
+          if (created) {
+            createdTerminals.push(slot);
+          }
+        }
+      }
+
+      const preferredActive = entry.activeTerminal;
+      const fallbackActive = createdTerminals[0] ?? null;
+      const targetActive = preferredActive && workspaceState.terminals.has(preferredActive)
+        ? preferredActive
+        : fallbackActive;
+      if (targetActive) {
+        this.setActiveTerminal(workspaceState, targetActive);
+      } else {
+        this.setActiveTerminal(workspaceState, null);
+      }
+    }
+  }
+
   async loadWorkspaces(showToast = false) {
     if (this.isRefreshing) {
       if (this.refreshPromise) {
@@ -317,6 +376,10 @@ class WorkspaceApp {
         const workspaces = await this.workspaceAPI.list();
         this.workspaces = this.sortWorkspaces(workspaces);
         this.render();
+        if (!this.hasRestoredWorkspaces) {
+          this.hasRestoredWorkspaces = true;
+          await this.restoreWorkspacesFromStore();
+        }
         if (showToast) {
           this.toast.success("Workspace list refreshed");
         }
@@ -692,10 +755,10 @@ class WorkspaceApp {
     if (!workspace || workspace.kind === "folder") {
       return;
     }
-    this.openWorkspaceTab(workspace);
+    void this.openWorkspaceTab(workspace);
   }
 
-  openWorkspaceTab(workspace) {
+  async openWorkspaceTab(workspace, options = {}) {
     const existing = this.openWorkspaces.get(workspace.path);
     if (existing) {
       this.activateWorkspaceTab(workspace.path);
@@ -733,6 +796,11 @@ class WorkspaceApp {
     placeholder.textContent = "Select a quick action to launch a terminal.";
     terminalPanels.appendChild(placeholder);
 
+    const savedStateRaw = options.savedState ?? (await this.terminalAPI.getWorkspaceState(workspace.path));
+    const savedState = savedStateRaw && typeof savedStateRaw === "object"
+      ? savedStateRaw
+      : { activeTerminal: null, terminals: {} };
+
     const workspaceState = {
       workspace,
       tabButton,
@@ -743,6 +811,7 @@ class WorkspaceApp {
       terminals: new Map(),
       terminalDefs: new Map(),
       activeTerminalKey: null,
+      savedState,
     };
 
     this.openWorkspaces.set(workspace.path, workspaceState);
@@ -783,6 +852,8 @@ class WorkspaceApp {
 
     workspaceState.terminalTabs.appendChild(tabButton);
 
+    const savedTerminal = workspaceState.savedState?.terminals?.[terminalDef.key];
+
     const record = {
       key: terminalDef.key,
       def: terminalDef,
@@ -794,11 +865,18 @@ class WorkspaceApp {
       resizeObserver: null,
       sessionId: null,
       closed: false,
-      quickCommandExecuted: false,
+      quickCommandExecuted: Boolean(savedTerminal?.quickCommandExecuted),
+      savedHistory: savedTerminal?.history ?? "",
+      lastExitCode: savedTerminal?.lastExitCode ?? null,
+      lastSignal: savedTerminal?.lastSignal ?? null,
     };
 
     workspaceState.terminals.set(terminalDef.key, record);
     workspaceState.terminalDefs.set(terminalDef.key, terminalDef);
+
+    if (record.lastExitCode !== null) {
+      tabButton.classList.add("is-exited");
+    }
   }
 
   async handleTerminalTabClick(workspaceState, terminalKey) {
@@ -814,6 +892,9 @@ class WorkspaceApp {
         setTimeout(() => {
           this.terminalAPI.write(record.sessionId, `${record.def.quickCommand}\n`);
           record.quickCommandExecuted = true;
+          void this.terminalAPI
+            .markQuickCommand(workspaceState.workspace.path, record.key)
+            .catch((error) => console.warn("Failed to persist quick command flag", error));
         }, 30);
       }
     }
@@ -847,6 +928,10 @@ class WorkspaceApp {
     if (!terminalKey && workspaceState.placeholder && !workspaceState.placeholder.isConnected) {
       workspaceState.terminalPanels.appendChild(workspaceState.placeholder);
     }
+
+    void this.terminalAPI
+      .setActiveTerminal(workspaceState.workspace.path, terminalKey)
+      .catch((error) => console.warn("Failed to persist active terminal", error));
   }
 
   async createTerminalForRecord(workspaceState, record) {
@@ -921,8 +1006,21 @@ class WorkspaceApp {
     record.panel = panel;
     record.resizeObserver = resizeObserver;
     record.closed = false;
+    record.quickCommandExecuted = record.quickCommandExecuted || Boolean(sessionInfo.quickCommandExecuted);
+    record.lastExitCode = sessionInfo.lastExitCode ?? record.lastExitCode ?? null;
+    record.lastSignal = sessionInfo.lastSignal ?? record.lastSignal ?? null;
 
-    record.tabButton.classList.remove("is-exited");
+    const history = record.savedHistory || sessionInfo.history || "";
+    if (history) {
+      terminal.write(history);
+    }
+    record.savedHistory = "";
+
+    if (record.lastExitCode !== null) {
+      record.tabButton.classList.add("is-exited");
+    } else {
+      record.tabButton.classList.remove("is-exited");
+    }
 
     this.sessionMap.set(sessionInfo.sessionId, record);
 
@@ -930,7 +1028,7 @@ class WorkspaceApp {
   }
 
   closeWorkspaceTab(path, options = {}) {
-    const { silent = false } = options;
+    const { silent = false, preserveState = false } = options;
     const workspaceState = this.openWorkspaces.get(path);
     if (!workspaceState) return;
 
@@ -941,9 +1039,16 @@ class WorkspaceApp {
       }
       if (record.sessionId) {
         this.sessionMap.delete(record.sessionId);
-        void this.terminalAPI.dispose(record.sessionId);
+        void this.terminalAPI.dispose(record.sessionId, { preserve: preserveState }).catch((error) => {
+          console.warn("Failed to dispose terminal", error);
+        });
       }
     });
+    if (!preserveState) {
+      void this.terminalAPI
+        .clearWorkspaceState(path)
+        .catch((error) => console.warn("Failed to clear workspace terminal state", error));
+    }
     workspaceState.tabButton.remove();
     workspaceState.panel.remove();
     this.openWorkspaces.delete(path);
@@ -994,6 +1099,8 @@ class WorkspaceApp {
     }
     record.closed = true;
     record.tabButton.classList.add("is-exited");
+    record.lastExitCode = payload.exitCode ?? null;
+    record.lastSignal = payload.signal ?? null;
     const exitCode = payload.exitCode ?? 0;
     const signal = payload.signal ? ` (signal ${payload.signal})` : "";
     record.terminal.write(
@@ -1023,7 +1130,7 @@ class WorkspaceApp {
     this.unsubscribe = [];
 
     const openPaths = Array.from(this.openWorkspaces.keys());
-    openPaths.forEach((path) => this.closeWorkspaceTab(path, { silent: true }));
+    openPaths.forEach((path) => this.closeWorkspaceTab(path, { silent: true, preserveState: true }));
   }
 
   buildStatusTooltip(status) {

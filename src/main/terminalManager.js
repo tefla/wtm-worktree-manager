@@ -1,6 +1,7 @@
 const { webContents } = require("electron");
 const { randomUUID } = require("node:crypto");
 const path = require("node:path");
+const { terminalSessionStore } = require("./terminalSessionStore");
 let pty;
 try {
   // eslint-disable-next-line global-require, import/no-extraneous-dependencies
@@ -35,7 +36,7 @@ class TerminalManager {
     this.workspaceIndex = new Map(); // workspacePath -> Map(slot -> sessionId)
   }
 
-  ensureSession(params, webContentsId) {
+  async ensureSession(params, webContentsId) {
     const {
       workspacePath,
       slot,
@@ -54,6 +55,9 @@ class TerminalManager {
     const shellCommand = command ?? process.env.SHELL ?? "zsh";
     const shellArgs = Array.isArray(args) ? args : null;
 
+    const savedWorkspace = await terminalSessionStore.getWorkspaceState(absPath);
+    const savedTerminal = savedWorkspace.terminals?.[slot] ?? null;
+
     const slotIndex = this.workspaceIndex.get(absPath);
     if (slotIndex?.has(slot)) {
       const existingId = slotIndex.get(slot);
@@ -67,11 +71,15 @@ class TerminalManager {
           command: existingSession.command,
           args: existingSession.args,
           existing: true,
+          history: savedTerminal?.history ?? "",
+          quickCommandExecuted: Boolean(savedTerminal?.quickCommandExecuted),
+          lastExitCode: savedTerminal?.lastExitCode ?? null,
+          lastSignal: savedTerminal?.lastSignal ?? null,
         };
       }
     }
 
-    return this.createSession(
+    const result = this.createSession(
       {
         workspacePath: absPath,
         slot,
@@ -83,6 +91,21 @@ class TerminalManager {
       },
       webContentsId,
     );
+
+    await terminalSessionStore.ensureTerminal(absPath, slot);
+
+    const session = this.sessions.get(result.sessionId);
+    if (session && savedTerminal) {
+      session.quickCommandExecuted = Boolean(savedTerminal.quickCommandExecuted);
+    }
+
+    return {
+      ...result,
+      history: savedTerminal?.history ?? "",
+      quickCommandExecuted: Boolean(savedTerminal?.quickCommandExecuted),
+      lastExitCode: savedTerminal?.lastExitCode ?? null,
+      lastSignal: savedTerminal?.lastSignal ?? null,
+    };
   }
 
   createSession(params, webContentsId) {
@@ -116,6 +139,7 @@ class TerminalManager {
       args: resolvedArgs,
       pty: ptyProcess,
       webContentsId,
+      quickCommandExecuted: false,
       closed: false,
     };
 
@@ -156,6 +180,8 @@ class TerminalManager {
       sessionId,
       data,
     });
+
+    void terminalSessionStore.appendHistory(session.workspacePath, session.slot, data);
   }
 
   handleExit(sessionId, event) {
@@ -171,6 +197,13 @@ class TerminalManager {
         signal: event?.signal ?? null,
       });
     }
+
+    void terminalSessionStore.markExit(
+      session.workspacePath,
+      session.slot,
+      event?.exitCode ?? null,
+      event?.signal ?? null,
+    );
   }
 
   write(sessionId, data) {
@@ -185,7 +218,8 @@ class TerminalManager {
     session.pty.resize(cols, rows);
   }
 
-  dispose(sessionId) {
+  async dispose(sessionId, options = {}) {
+    const preserve = Boolean(options.preserve);
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -205,6 +239,10 @@ class TerminalManager {
     if (slotIndex && slotIndex.size === 0) {
       this.workspaceIndex.delete(session.workspacePath);
     }
+
+    if (!preserve) {
+      await terminalSessionStore.clearTerminal(session.workspacePath, session.slot);
+    }
   }
 
   listSessionsForWorkspace(workspacePath) {
@@ -222,6 +260,39 @@ class TerminalManager {
         args: session.args,
         closed: session.closed,
       }));
+  }
+
+  lookupSession(workspacePath, slot) {
+    const absPath = path.resolve(workspacePath);
+    const slotIndex = this.workspaceIndex.get(absPath);
+    if (!slotIndex) return null;
+    const sessionId = slotIndex.get(slot);
+    if (!sessionId) return null;
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  async markQuickCommandExecuted(workspacePath, slot) {
+    await terminalSessionStore.markQuickCommand(workspacePath, slot);
+    const session = this.lookupSession(workspacePath, slot);
+    if (session) {
+      session.quickCommandExecuted = true;
+    }
+  }
+
+  async setActiveTerminal(workspacePath, slot) {
+    await terminalSessionStore.setActiveTerminal(workspacePath, slot ?? null);
+  }
+
+  async getWorkspaceState(workspacePath) {
+    return terminalSessionStore.getWorkspaceState(workspacePath);
+  }
+
+  async listSavedWorkspaces() {
+    return terminalSessionStore.listWorkspaces();
+  }
+
+  async clearWorkspaceState(workspacePath) {
+    await terminalSessionStore.clearWorkspace(workspacePath);
   }
 }
 

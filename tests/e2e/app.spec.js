@@ -32,6 +32,7 @@ async function setupGitWorkspace() {
   await fs.mkdir(path.join(workspaceRoot, "orphan-folder"));
 
   const settingsPath = path.join(os.tmpdir(), `wtm-settings-${Date.now()}.json`);
+  const terminalsPath = path.join(os.tmpdir(), `wtm-terminals-${Date.now()}.json`);
   await fs.writeFile(
     settingsPath,
     JSON.stringify(
@@ -53,8 +54,10 @@ async function setupGitWorkspace() {
     repoDir,
     workspaceRoot,
     settingsPath,
+    terminalsPath,
     async cleanup() {
       await fs.rm(settingsPath, { force: true });
+      await fs.rm(terminalsPath, { force: true });
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await runGit(["worktree", "prune"], { cwd: repoDir }).catch(() => {});
       await fs.rm(repoDir, { recursive: true, force: true });
@@ -74,6 +77,7 @@ test("lists git worktrees and unmanaged folders", async () => {
       ELECTRON_DISABLE_SANDBOX: "1",
       ELECTRON_DISABLE_GPU: process.env.ELECTRON_DISABLE_GPU ?? "1",
       WTM_SETTINGS_PATH: setup.settingsPath,
+      WTM_TERMINAL_STORE: setup.terminalsPath,
     },
   });
 

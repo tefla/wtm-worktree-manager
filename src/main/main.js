@@ -81,12 +81,36 @@ function exposeTerminalHandlers() {
 
   ipcMain.handle("terminal:dispose", (_event, params) => {
     if (!params?.sessionId) return;
-    terminalManager.dispose(params.sessionId);
+    return terminalManager.dispose(params.sessionId, params.options || {});
   });
 
   ipcMain.handle("terminal:listForWorkspace", (_event, params) => {
     if (!params?.workspacePath) return [];
     return terminalManager.listSessionsForWorkspace(params.workspacePath);
+  });
+
+  ipcMain.handle("terminal:getWorkspaceState", (_event, params) => {
+    if (!params?.workspacePath) return { activeTerminal: null, terminals: {} };
+    return terminalManager.getWorkspaceState(params.workspacePath);
+  });
+
+  ipcMain.handle("terminal:listSavedWorkspaces", () => {
+    return terminalManager.listSavedWorkspaces();
+  });
+
+  ipcMain.handle("terminal:markQuickCommand", (_event, params) => {
+    if (!params?.workspacePath || !params?.slot) return;
+    return terminalManager.markQuickCommandExecuted(params.workspacePath, params.slot);
+  });
+
+  ipcMain.handle("terminal:setActiveTerminal", (_event, params) => {
+    if (!params?.workspacePath) return;
+    return terminalManager.setActiveTerminal(params.workspacePath, params.slot ?? null);
+  });
+
+  ipcMain.handle("terminal:clearWorkspaceState", (_event, params) => {
+    if (!params?.workspacePath) return;
+    return terminalManager.clearWorkspaceState(params.workspacePath);
   });
 }
 
