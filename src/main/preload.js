@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
   refresh: (params) => invoke("workspace:refresh", params),
 });
 
+contextBridge.exposeInMainWorld("settingsAPI", {
+  listEnvironments: () => invoke("settings:listEnvironments"),
+  setActiveEnvironment: (params) => invoke("settings:setActiveEnvironment", params),
+});
+
 contextBridge.exposeInMainWorld("terminalAPI", {
   ensureSession: (params) => invoke("terminal:ensure", params),
   write: (sessionId, data) => ipcRenderer.send("terminal:write", { sessionId, data }),

@@ -90,10 +90,40 @@ function exposeTerminalHandlers() {
   });
 }
 
+function exposeSettingsHandlers() {
+  ipcMain.handle("settings:listEnvironments", async () => {
+    await settingsManager.load();
+    const environments = settingsManager.listEnvironments();
+    const active = settingsManager.getActiveEnvironment();
+    return {
+      environments,
+      activeEnvironment: active.name,
+    };
+  });
+
+  ipcMain.handle("settings:setActiveEnvironment", async (_event, params) => {
+    const name = params?.name;
+    if (typeof name !== "string" || !name) {
+      throw new Error("Environment name is required");
+    }
+
+    const environment = await settingsManager.setActiveEnvironment(name);
+    workspaceManager.configure(environment);
+    const environments = settingsManager.listEnvironments();
+
+    return {
+      activeEnvironment: environment.name,
+      environment,
+      environments,
+    };
+  });
+}
+
 app.whenReady().then(async () => {
   try {
-    const settings = await settingsManager.load();
-    workspaceManager.configure(settings);
+    await settingsManager.load();
+    const environment = settingsManager.getActiveEnvironment();
+    workspaceManager.configure(environment);
   } catch (error) {
     dialog.showErrorBox(
       "WTM Settings Error",
@@ -103,6 +133,7 @@ app.whenReady().then(async () => {
 
   exposeWorkspaceHandlers();
   exposeTerminalHandlers();
+  exposeSettingsHandlers();
   await createWindow();
 
   app.on("activate", async () => {

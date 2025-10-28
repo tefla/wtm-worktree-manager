@@ -93,6 +93,49 @@ code {
   gap: 8px;
 }
 
+.environment-switcher {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.environment-switcher span {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca9c3;
+}
+
+.environment-switcher select {
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 6px 24px 6px 10px;
+  background: rgba(9, 17, 32, 0.85);
+  color: #e2e8f0;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
+  min-width: 180px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, rgba(148, 163, 184, 0.7) 50%),
+    linear-gradient(135deg, rgba(148, 163, 184, 0.7) 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(50% - 3px), calc(100% - 9px) calc(50% - 3px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.environment-switcher select:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
+}
+
+.environment-switcher select:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  background-image: none;
+}
+
 .primary-button,
 .accent-button,
 .ghost-button,

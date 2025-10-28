@@ -36,8 +36,13 @@ async function setupGitWorkspace() {
     settingsPath,
     JSON.stringify(
       {
-        repoDir,
-        workspaceRoot,
+        environments: {
+          test: {
+            repoDir,
+            workspaceRoot,
+          },
+        },
+        activeEnvironment: "test",
       },
       null,
       2,

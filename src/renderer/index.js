@@ -68,6 +68,10 @@ class ToastManager {
 class WorkspaceApp {
   constructor(workspaceAPI) {
     this.workspaceAPI = workspaceAPI;
+    this.settingsAPI = window.settingsAPI;
+    if (!this.settingsAPI) {
+      throw new Error("Settings API bridge missing from preload context.");
+    }
     this.terminalAPI = window.terminalAPI;
     if (!this.terminalAPI) {
       throw new Error("Terminal API bridge missing from preload context.");
@@ -84,6 +88,7 @@ class WorkspaceApp {
     this.baseInput = this.requireElement("base-input");
     this.createButton = this.requireElement("create-button");
     this.refreshButton = this.requireElement("refresh-button");
+    this.environmentSelect = this.requireElement("environment-select");
     this.tabsContainer = this.requireElement("workspace-tabs");
     this.tabBar = this.requireElement("workspace-tab-bar");
     this.tabPanels = this.requireElement("workspace-tab-panels");
@@ -91,12 +96,24 @@ class WorkspaceApp {
 
     this.workspaces = [];
     this.isRefreshing = false;
+    this.refreshPromise = null;
     this.openWorkspaces = new Map();
     this.activeWorkspacePath = null;
     this.sessionMap = new Map();
     this.rowElements = new Map();
     this.unsubscribe = [];
     this.defaultTerminals = DEFAULT_TERMINALS;
+    this.environments = [];
+    this.activeEnvironmentName = "";
+
+    this.environmentSelect.innerHTML = "";
+    const loadingOption = document.createElement("option");
+    loadingOption.value = "";
+    loadingOption.textContent = "Loading…";
+    loadingOption.disabled = true;
+    loadingOption.selected = true;
+    this.environmentSelect.appendChild(loadingOption);
+    this.environmentSelect.disabled = true;
 
     this.unsubscribe.push(this.terminalAPI.onData((payload) => this.handleTerminalData(payload)));
     this.unsubscribe.push(this.terminalAPI.onExit((payload) => this.handleTerminalExit(payload)));
@@ -107,7 +124,7 @@ class WorkspaceApp {
 
     this.setupEventListeners();
     this.renderLoading();
-    this.loadWorkspaces();
+    void this.initialize();
   }
 
   requireElement(id) {
@@ -127,31 +144,173 @@ class WorkspaceApp {
     this.refreshButton.addEventListener("click", () => {
       void this.loadWorkspaces(true);
     });
+
+    this.environmentSelect.addEventListener("change", () => {
+      void this.handleEnvironmentChange();
+    });
+  }
+
+  async initialize() {
+    try {
+      await this.loadEnvironments();
+    } catch (error) {
+      console.error("Failed to load environments", error);
+      this.renderError();
+      return;
+    }
+
+    await this.loadWorkspaces();
+  }
+
+  async loadEnvironments() {
+    try {
+      const result = await this.settingsAPI.listEnvironments();
+      const environments = Array.isArray(result?.environments) ? result.environments : [];
+      this.environments = environments;
+      const active =
+        typeof result?.activeEnvironment === "string"
+          ? result.activeEnvironment
+          : environments[0]?.name ?? "";
+      this.activeEnvironmentName = active;
+      this.renderEnvironmentOptions();
+    } catch (error) {
+      const message = this.normaliseError(error);
+      this.environmentSelect.innerHTML = "";
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No environments configured";
+      option.disabled = true;
+      option.selected = true;
+      this.environmentSelect.appendChild(option);
+      this.environmentSelect.disabled = true;
+      this.environmentSelect.title = "";
+      this.toast.error(message);
+      throw error;
+    }
+  }
+
+  renderEnvironmentOptions(options = {}) {
+    const { preserveDisabled = false } = options;
+    this.environmentSelect.innerHTML = "";
+
+    if (this.environments.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No environments configured";
+      option.disabled = true;
+      option.selected = true;
+      this.environmentSelect.appendChild(option);
+      this.environmentSelect.disabled = true;
+      this.environmentSelect.title = "";
+      return;
+    }
+
+    let active = this.environments.find((env) => env.name === this.activeEnvironmentName);
+    if (!active) {
+      active = this.environments[0];
+      this.activeEnvironmentName = active.name;
+    }
+
+    for (const environment of this.environments) {
+      const option = document.createElement("option");
+      option.value = environment.name;
+      option.textContent = environment.name;
+      option.selected = environment.name === this.activeEnvironmentName;
+      option.dataset.repoDir = environment.repoDir;
+      option.dataset.workspaceRoot = environment.workspaceRoot;
+      option.title = `Repo: ${environment.repoDir}\nWorkspaces: ${environment.workspaceRoot}`;
+      this.environmentSelect.appendChild(option);
+    }
+
+    this.environmentSelect.value = this.activeEnvironmentName;
+    this.environmentSelect.title = `Repo: ${active.repoDir}\nWorkspaces: ${active.workspaceRoot}`;
+
+    if (!preserveDisabled) {
+      this.environmentSelect.disabled = false;
+    }
+  }
+
+  async handleEnvironmentChange() {
+    const target = this.environmentSelect.value;
+    if (!target || target === this.activeEnvironmentName) {
+      this.environmentSelect.value = this.activeEnvironmentName;
+      return;
+    }
+
+    this.environmentSelect.disabled = true;
+
+    try {
+      const result = await this.settingsAPI.setActiveEnvironment({ name: target });
+      if (Array.isArray(result?.environments)) {
+        this.environments = result.environments;
+      }
+
+      const active =
+        typeof result?.activeEnvironment === "string" ? result.activeEnvironment : target;
+      this.activeEnvironmentName = active;
+      this.renderEnvironmentOptions({ preserveDisabled: true });
+      this.toast.success(`Switched to ${this.activeEnvironmentName}`);
+
+      this.resetWorkspaceTabs();
+      this.workspaces = [];
+      this.renderLoading();
+      await this.loadWorkspaces();
+    } catch (error) {
+      console.error("Failed to switch environment", error);
+      this.toast.error(this.normaliseError(error));
+      this.environmentSelect.value = this.activeEnvironmentName;
+    } finally {
+      this.environmentSelect.disabled = false;
+    }
+  }
+
+  resetWorkspaceTabs() {
+    const openPaths = Array.from(this.openWorkspaces.keys());
+    openPaths.forEach((path) => this.closeWorkspaceTab(path, { silent: true }));
+    this.sessionMap.clear();
+    this.activeWorkspacePath = null;
+    this.rowElements.clear();
+    this.updateWorkspacePlaceholderVisibility();
+    this.updateActiveRowHighlight();
   }
 
   async loadWorkspaces(showToast = false) {
-    if (this.isRefreshing) return;
+    if (this.isRefreshing) {
+      if (this.refreshPromise) {
+        await this.refreshPromise;
+      }
+    }
+
+    if (this.isRefreshing) {
+      return;
+    }
 
     this.isRefreshing = true;
     this.refreshButton.disabled = true;
     this.refreshButton.textContent = "Refreshing…";
 
-    try {
-      const workspaces = await this.workspaceAPI.list();
-      this.workspaces = this.sortWorkspaces(workspaces);
-      this.render();
-      if (showToast) {
-        this.toast.success("Workspace list refreshed");
+    const loadTask = (async () => {
+      try {
+        const workspaces = await this.workspaceAPI.list();
+        this.workspaces = this.sortWorkspaces(workspaces);
+        this.render();
+        if (showToast) {
+          this.toast.success("Workspace list refreshed");
+        }
+      } catch (error) {
+        console.error("Failed to load workspaces", error);
+        this.toast.error(this.normaliseError(error));
+        this.renderError();
+      } finally {
+        this.isRefreshing = false;
+        this.refreshPromise = null;
+        this.refreshButton.disabled = false;
+        this.refreshButton.textContent = "Refresh";
       }
-    } catch (error) {
-      console.error("Failed to load workspaces", error);
-      this.toast.error(this.normaliseError(error));
-      this.renderError();
-    } finally {
-      this.isRefreshing = false;
-      this.refreshButton.disabled = false;
-      this.refreshButton.textContent = "Refresh";
-    }
+    })();
+
+    this.refreshPromise = loadTask;
+    await loadTask;
   }
 
   async handleCreate() {
