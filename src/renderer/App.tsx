@@ -136,6 +136,7 @@ function App(): JSX.Element {
   const [toastList, setToastList] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
+  const [updatingWorkspaces, setUpdatingWorkspaces] = useState<Record<string, boolean>>({});
 
   const pushToast = useCallback((message: string, kind: ToastKind = "info") => {
     toastIdRef.current += 1;
@@ -779,6 +780,33 @@ function App(): JSX.Element {
     [pushToast],
   );
 
+  const handleUpdateWorkspace = useCallback(
+    async (workspace: WorkspaceSummary) => {
+      setUpdatingWorkspaces((prev) => ({ ...prev, [workspace.path]: true }));
+      try {
+        const updated = await window.workspaceAPI.update({ path: workspace.path });
+        setWorkspaces((prev) => prev.map((item) => (item.path === updated.path ? updated : item)));
+        const state = workspaceTabsRef.current.get(workspace.path);
+        if (state) {
+          state.workspace = updated;
+          forceRender();
+        }
+        pushToast(`Workspace '${updated.branch ?? updated.relativePath}' is up to date`, "success");
+      } catch (error) {
+        console.error("Failed to update workspace", error);
+        const message = error instanceof Error ? error.message : "Failed to update workspace";
+        pushToast(message, "error");
+      } finally {
+        setUpdatingWorkspaces((prev) => {
+          const next = { ...prev };
+          delete next[workspace.path];
+          return next;
+        });
+      }
+    },
+    [forceRender, pushToast],
+  );
+
   const handleDeleteWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
       const confirmed = window.confirm(
@@ -927,6 +955,8 @@ function App(): JSX.Element {
           onSelect={handleWorkspaceSelect}
           onRefreshWorkspace={handleRefreshWorkspace}
           onDeleteWorkspace={handleDeleteWorkspace}
+          onUpdateWorkspace={handleUpdateWorkspace}
+          updatingPaths={updatingWorkspaces}
         />
         <WorkspaceTabsPanel
           workspaceOrder={workspaceOrder}

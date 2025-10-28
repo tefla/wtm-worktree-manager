@@ -1,9 +1,13 @@
 import type { WorkspaceSummary } from "../types";
 
-interface StatusIcon {
+export type StatusIconKind = "clean" | "dirty" | "folder" | "ahead" | "behind" | "neutral";
+
+export interface StatusIcon {
   className: string;
   text: string;
   tooltip: string;
+  kind: StatusIconKind;
+  value?: number;
 }
 
 export function buildStatusTooltip(status: WorkspaceSummary["status"]): string {
@@ -44,17 +48,17 @@ export function buildStatusTooltip(status: WorkspaceSummary["status"]): string {
 export function buildStatusIcons(workspace: WorkspaceSummary): StatusIcon[] {
   const status = workspace.status;
   if (workspace.kind === "folder") {
-    return [{ className: "status-icon folder", text: "📁", tooltip: "Folder not linked to a git worktree" }];
+    return [{ className: "status-icon folder", text: "📁", tooltip: "Folder not linked to a git worktree", kind: "folder" }];
   }
 
   const tooltip = buildStatusTooltip(status);
   const icons: StatusIcon[] = [];
   if (status.clean) {
-    icons.push({ className: "status-icon clean", text: "✔", tooltip });
+    icons.push({ className: "status-icon clean", text: "✔", tooltip, kind: "clean" });
   } else {
     const changeCount = status.changeCount ?? 0;
     const warningText = changeCount > 0 ? `⚠${String(changeCount)}` : "⚠";
-    icons.push({ className: "status-icon dirty", text: warningText, tooltip });
+    icons.push({ className: "status-icon dirty", text: warningText, tooltip, kind: "dirty", value: changeCount });
   }
 
   if (status.ahead) {
@@ -62,6 +66,8 @@ export function buildStatusIcons(workspace: WorkspaceSummary): StatusIcon[] {
       className: "status-icon ahead",
       text: `↑${status.ahead}`,
       tooltip: `Ahead by ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`,
+      kind: "ahead",
+      value: status.ahead,
     });
   }
 
@@ -70,11 +76,13 @@ export function buildStatusIcons(workspace: WorkspaceSummary): StatusIcon[] {
       className: "status-icon behind",
       text: `↓${status.behind}`,
       tooltip: `Behind by ${status.behind} commit${status.behind === 1 ? "" : "s"}`,
+      kind: "behind",
+      value: status.behind,
     });
   }
 
   if (icons.length === 0) {
-    icons.push({ className: "status-icon", text: "•", tooltip: "No status information" });
+    icons.push({ className: "status-icon", text: "•", tooltip: "No status information", kind: "neutral" });
   }
 
   return icons;

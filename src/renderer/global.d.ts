@@ -7,6 +7,7 @@ declare global {
       create: (params: { branch: string; baseRef?: string }) => Promise<WorkspaceSummary>;
       delete: (params: { path: string; force?: boolean }) => Promise<{ success: boolean; reason?: string; message?: string; path?: string }>;
       refresh: (params: { path: string }) => Promise<WorkspaceSummary>;
+      update: (params: { path: string }) => Promise<WorkspaceSummary>;
     };
     settingsAPI: {
       listEnvironments: () => Promise<SettingsResponse>;

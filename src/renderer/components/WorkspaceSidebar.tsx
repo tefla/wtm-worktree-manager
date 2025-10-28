@@ -10,6 +10,8 @@ interface WorkspaceSidebarProps {
   onSelect: (workspace: WorkspaceSummary) => void;
   onRefreshWorkspace: (workspace: WorkspaceSummary) => void;
   onDeleteWorkspace: (workspace: WorkspaceSummary) => void;
+  onUpdateWorkspace: (workspace: WorkspaceSummary) => void;
+  updatingPaths: Record<string, boolean>;
 }
 
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
@@ -19,6 +21,8 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   onSelect,
   onRefreshWorkspace,
   onDeleteWorkspace,
+  onUpdateWorkspace,
+  updatingPaths,
 }) => {
   return (
     <aside className="workspace-sidebar">
@@ -37,6 +41,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
             const statusIcons = buildStatusIcons(workspace);
             const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
             const tooltip = buildStatusTooltip(workspace.status);
+            const isUpdating = Boolean(updatingPaths[workspace.path]);
             return (
               <div
                 key={workspace.path}
@@ -56,11 +61,30 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   <span className="workspace-name">{branchLabel}</span>
                 </div>
                 <div className="workspace-icons">
-                  {statusIcons.map((icon, index) => (
-                    <span key={`${icon.text}-${index}`} className={icon.className} title={icon.tooltip}>
-                      {icon.text}
-                    </span>
-                  ))}
+                  {statusIcons.map((icon, index) => {
+                    if (icon.kind === "behind") {
+                      return (
+                        <button
+                          key={`${icon.text}-${index}`}
+                          type="button"
+                          className={cx(icon.className, "status-icon-button")}
+                          title={`${icon.tooltip}\nClick to pull the latest changes`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onUpdateWorkspace(workspace);
+                          }}
+                          disabled={isUpdating}
+                        >
+                          {icon.text}
+                        </button>
+                      );
+                    }
+                    return (
+                      <span key={`${icon.text}-${index}`} className={icon.className} title={icon.tooltip}>
+                        {icon.text}
+                      </span>
+                    );
+                  })}
                 </div>
                 {workspace.kind === "worktree" && (
                   <div className="workspace-row-actions">

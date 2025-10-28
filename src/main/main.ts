@@ -60,6 +60,20 @@ function exposeWorkspaceHandlers() {
     }
     return workspaceManager.refreshWorkspace(targetPath);
   });
+
+  ipcMain.handle("workspace:update", async (_event, params) => {
+    const targetPath = params?.path;
+    if (!targetPath) {
+      throw new Error("Path is required to update workspace");
+    }
+    try {
+      return await workspaceManager.updateWorkspace(targetPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      dialog.showErrorBox("Update Workspace Failed", message);
+      throw error;
+    }
+  });
 }
 
 function exposeTerminalHandlers() {

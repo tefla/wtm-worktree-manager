@@ -7,6 +7,7 @@ type WorkspaceAPI = {
   create: (params: unknown) => Promise<unknown>;
   delete: (params: unknown) => Promise<unknown>;
   refresh: (params: unknown) => Promise<unknown>;
+  update: (params: unknown) => Promise<unknown>;
 };
 
 type SettingsAPI = {
@@ -43,6 +44,7 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
   create: (params) => invoke("workspace:create", params),
   delete: (params) => invoke("workspace:delete", params),
   refresh: (params) => invoke("workspace:refresh", params),
+  update: (params) => invoke("workspace:update", params),
 } satisfies WorkspaceAPI);
 
 contextBridge.exposeInMainWorld("settingsAPI", {

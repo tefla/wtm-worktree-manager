@@ -443,6 +443,44 @@ export class WorkspaceManager {
 
     return { success: true, path: targetPath };
   }
+
+  async updateWorkspace(path: string): Promise<WorkspaceSummary> {
+    const targetPath = resolve(path);
+    const entries = await this.getWorktreeEntries();
+    const entry = entries.find((item) => resolve(item.path) === targetPath);
+    if (!entry) {
+      throw new Error(`Workspace not found for path: ${path}`);
+    }
+
+    const statusResult = await this.git(["status", "--porcelain", "--branch"], {
+      cwd: targetPath,
+    });
+    const parsed = parseStatus(statusResult.stdout, entry.branch);
+
+    if (!parsed.upstream) {
+      throw new Error("Workspace has no upstream configured. Set an upstream before updating.");
+    }
+    if (!parsed.clean) {
+      throw new Error("Workspace has uncommitted changes. Commit or stash before updating.");
+    }
+    if (parsed.behind <= 0) {
+      return this.buildWorkspace(entry);
+    }
+
+    await this.git(["fetch", "--all"], { cwd: targetPath, allowFailure: true });
+
+    try {
+      await this.git(["pull", "--ff-only"], { cwd: targetPath });
+    } catch (error) {
+      if (error instanceof GitCommandError) {
+        const message = error.stderr || error.message;
+        throw new Error(`Failed to update workspace: ${message}`);
+      }
+      throw error;
+    }
+
+    return this.buildWorkspace(entry);
+  }
 }
 
 export const workspaceManager = new WorkspaceManager();

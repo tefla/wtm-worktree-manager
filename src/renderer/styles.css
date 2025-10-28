@@ -400,6 +400,21 @@ code {
   line-height: 1;
 }
 
+.status-icon-button {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.status-icon-button:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
 .status-icon.clean {
   color: #34d399;
   background: rgba(52, 211, 153, 0.1);
