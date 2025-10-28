@@ -259,7 +259,7 @@ code {
   font-size: 0.85rem;
 }
 
-.workspace-area {
+.content-shell {
   flex: 1;
   display: flex;
   gap: 12px;
@@ -981,6 +981,39 @@ code {
   gap: 12px;
 }
 
+.workspace-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workspace-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-info-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #cbd5f5;
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+}
+
+.workspace-info-badge:hover {
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #e2e8f0;
+}
+
 .workspace-detail-header h2 {
   margin: 0;
   font-size: 1.1rem;
@@ -997,47 +1030,6 @@ code {
 .workspace-detail-actions {
   display: flex;
   gap: 6px;
-}
-
-.workspace-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(15, 23, 42, 0.9);
-  border-radius: 8px;
-  border: 1px solid rgba(71, 85, 105, 0.35);
-  padding: 12px 14px;
-}
-
-.workspace-summary h3 {
-  margin: 6px 0 2px;
-  font-size: 0.85rem;
-  color: #cbd5f5;
-}
-
-.workspace-summary h3:first-child {
-  margin-top: 0;
-}
-
-.workspace-summary p {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #e2e8f0;
-}
-
-.workspace-changes {
-  margin-top: 8px;
-}
-
-.workspace-changes ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  color: #cbd5f5;
-  font-size: 0.8rem;
-}
-
-.workspace-changes li {
-  margin-bottom: 2px;
 }
 
 .workspace-terminals {

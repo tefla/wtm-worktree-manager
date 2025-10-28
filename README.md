@@ -42,6 +42,10 @@ yet, so restart the process after larger code changes. On systems without GPU
 support for Electron you may need to remove or adjust the GPU-disabling flags in
 `package.json`.
 
+The dev script will automatically rebuild the `node-pty` native module for the
+current Electron version. If you switch Node.js or upgrade Electron manually,
+you can trigger the rebuild yourself via `npm run rebuild:native`.
+
 ## Tests
 
 ```bash

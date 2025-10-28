@@ -1,36 +1,91 @@
-import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import type {
   EnsureTerminalResponse,
   QuickAccessEntry,
   SettingsResponse,
   TerminalDataPayload,
   TerminalExitPayload,
+  WorkspaceStateResponse,
   WorkspaceSummary,
 } from "./types";
 
+type ToastKind = "info" | "success" | "error";
+
 interface Toast {
   id: number;
-  kind: "info" | "success" | "error";
+  kind: ToastKind;
   message: string;
 }
 
-interface TerminalEntry {
+interface TerminalDefinition {
+  key: string;
+  label: string;
+  quickCommand: string | null;
+  isEphemeral: boolean;
+}
+
+interface SavedTerminalState {
+  history?: string;
+  quickCommandExecuted?: boolean;
+  lastExitCode?: number | null;
+  lastSignal?: string | null;
+  label?: string | null;
+}
+
+interface SavedWorkspaceState {
+  workspacePath: string;
+  activeTerminal: string | null;
+  terminals: Record<string, SavedTerminalState>;
+}
+
+interface TerminalRecord {
+  key: string;
+  label: string;
+  quickCommand: string | null;
+  isEphemeral: boolean;
   sessionId: string | null;
-  log: string;
   quickCommandExecuted: boolean;
   lastExitCode: number | null;
   lastSignal: string | null;
-  label: string | null | undefined;
+  savedHistory: string;
+  ignoreSavedHistory: boolean;
+  closed: boolean;
+  shouldStart: boolean;
 }
 
-type WorkspaceTerminalMap = Record<string, Record<string, TerminalEntry>>;
-type ActiveSlotMap = Record<string, string | null>;
+interface WorkspaceTabState {
+  workspace: WorkspaceSummary;
+  terminalOrder: string[];
+  terminals: Map<string, TerminalRecord>;
+  activeTerminalKey: string | null;
+  savedState: SavedWorkspaceState;
+  ephemeralCounter: number;
+}
 
-type SessionIndexEntry = { workspacePath: string; slot: string };
+interface SessionIndexEntry {
+  workspacePath: string;
+  terminalKey: string;
+}
 
-function cx(
-  ...values: Array<string | null | undefined | false | Record<string, boolean>>
-): string {
+interface TerminalRuntime {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  resizeObserver: ResizeObserver;
+  container: HTMLDivElement;
+}
+
+const TERMINAL_HISTORY_LIMIT = 40000;
+const TERMINAL_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "SFMono-Regular", monospace';
+const TERMINAL_THEME = {
+  background: "#070d1d",
+  foreground: "#d1d5db",
+  cursor: "#38bdf8",
+  selectionBackground: "#1e293b",
+};
+
+function cx(...values: Array<string | null | undefined | false | Record<string, boolean>>): string {
   const classes: string[] = [];
   for (const value of values) {
     if (!value) continue;
@@ -47,227 +102,793 @@ function cx(
   return classes.join(" ").trim();
 }
 
-function formatSummary(workspace: WorkspaceSummary): string {
-  const status = workspace.status.summary;
-  if (workspace.kind === "folder") {
-    return status;
-  }
-  const parts: string[] = [status];
-  if (!workspace.status.clean) {
-    if (workspace.status.ahead > 0) {
-      parts.push(`↑${workspace.status.ahead}`);
-    }
-    if (workspace.status.behind > 0) {
-      parts.push(`↓${workspace.status.behind}`);
-    }
-  }
-  if (workspace.status.upstream) {
-    parts.push(`←→ ${workspace.status.upstream}`);
-  }
-  return parts.join(" · ");
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-function formatCommit(workspace: WorkspaceSummary): string {
-  if (!workspace.lastCommit) {
-    return "No commits yet";
+function normaliseQuickAccessList(list: unknown, options: { fallbackToDefault?: boolean } = {}): TerminalDefinition[] {
+  const { fallbackToDefault = false } = options;
+  const source = Array.isArray(list) ? (list as QuickAccessEntry[]) : [];
+  const normalized: TerminalDefinition[] = [];
+  const seenKeys = new Set<string>();
+
+  source.forEach((entry, index) => {
+    const label = typeof entry?.label === "string" ? entry.label.trim() : "";
+    const command = typeof entry?.quickCommand === "string" ? entry.quickCommand.trim() : "";
+    if (!label && !command) {
+      return;
+    }
+    const baseKey = entry?.key && typeof entry.key === "string" ? entry.key.trim() : slugify(label || command);
+    let key = baseKey || `slot-${index + 1}`;
+    let counter = 1;
+    while (seenKeys.has(key)) {
+      key = `${baseKey || `slot-${index + 1}`}-${(counter += 1)}`;
+    }
+    seenKeys.add(key);
+    normalized.push({
+      key,
+      label: label || command || `Command ${index + 1}`,
+      quickCommand: command || null,
+      isEphemeral: false,
+    });
+  });
+
+  if (normalized.length === 0 && fallbackToDefault) {
+    return [
+      { key: "npm-install", label: "npm i", quickCommand: "npm i", isEphemeral: false },
+      {
+        key: "lerna-bootstrap",
+        label: "npm run lerna:bootstrap",
+        quickCommand: "npm run lerna:bootstrap",
+        isEphemeral: false,
+      },
+    ];
   }
-  const commit = workspace.lastCommit;
-  return `${commit.shortSha} – ${commit.subject} (${commit.relativeTime} by ${commit.author})`;
+
+  return normalized;
 }
+
+function buildStatusTooltip(status: WorkspaceSummary["status"]): string {
+  if (!status) {
+    return "Status unavailable";
+  }
+
+  const lines: string[] = [];
+  const changeCount = status.changeCount ?? 0;
+
+  if (status.clean) {
+    const cleanLabel =
+      status.summary && status.summary.trim().toLowerCase() !== "clean"
+        ? status.summary.trim()
+        : "Clean working tree";
+    lines.push(cleanLabel);
+  } else if (changeCount > 0) {
+    lines.push(`${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`);
+  } else if (status.summary) {
+    lines.push(status.summary.trim());
+  }
+
+  if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
+    lines.push(...status.sampleChanges.slice(0, 5).map((line) => line.trim()));
+  }
+
+  const filtered = lines
+    .map((line) => (typeof line === "string" ? line.trim() : ""))
+    .filter((line, index, arr) => line && arr.indexOf(line) === index);
+
+  if (filtered.length === 0) {
+    filtered.push("Status unavailable");
+  }
+
+  return filtered.join("\n");
+}
+
+function buildStatusIcons(workspace: WorkspaceSummary): Array<{ className: string; text: string; tooltip: string }> {
+  const status = workspace.status;
+  if (workspace.kind === "folder") {
+    return [{ className: "status-icon folder", text: "📁", tooltip: "Folder not linked to a git worktree" }];
+  }
+
+  const tooltip = buildStatusTooltip(status);
+  const icons: Array<{ className: string; text: string; tooltip: string }> = [];
+  if (status.clean) {
+    icons.push({ className: "status-icon clean", text: "✔", tooltip });
+  } else {
+    const changeCount = status.changeCount ?? 0;
+    const warningText = changeCount > 0 ? `⚠${String(changeCount)}` : "⚠";
+    icons.push({ className: "status-icon dirty", text: warningText, tooltip });
+  }
+
+  if (status.ahead) {
+    icons.push({
+      className: "status-icon ahead",
+      text: `↑${status.ahead}`,
+      tooltip: `Ahead by ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`,
+    });
+  }
+
+  if (status.behind) {
+    icons.push({
+      className: "status-icon behind",
+      text: `↓${status.behind}`,
+      tooltip: `Behind by ${status.behind} commit${status.behind === 1 ? "" : "s"}`,
+    });
+  }
+
+  if (icons.length === 0) {
+    icons.push({ className: "status-icon", text: "•", tooltip: "No status information" });
+  }
+
+  return icons;
+}
+
+function runtimeKey(workspacePath: string, terminalKey: string): string {
+  return `${workspacePath}::${terminalKey}`;
+}
+
+function ensureSavedWorkspaceState(workspacePath: string, saved?: WorkspaceStateResponse | null): SavedWorkspaceState {
+  if (!saved || typeof saved !== "object") {
+    return { workspacePath, activeTerminal: null, terminals: {} };
+  }
+  const terminals = saved.terminals && typeof saved.terminals === "object" ? saved.terminals : {};
+  return {
+    workspacePath,
+    activeTerminal: saved.activeTerminal ?? null,
+    terminals: { ...terminals },
+  };
+}
+
+function buildWorkspaceDetailTooltip(workspace: WorkspaceSummary): string {
+  const status = workspace.status;
+  const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
+  const lines: string[] = [
+    `Branch: ${branchLabel}`,
+    `Worktree: ${workspace.relativePath || "—"}`,
+    `Path: ${workspace.path}`,
+    `HEAD: ${workspace.headSha || "—"}`,
+    status.upstream ? `Upstream: ${status.upstream}` : "Upstream: —",
+    `Status: ${status.summary}`,
+  ];
+
+  if (!status.clean && status.changeCount) {
+    lines.push(`${status.changeCount} uncommitted change${status.changeCount === 1 ? "" : "s"}`);
+  }
+
+  if (workspace.lastCommit) {
+    lines.push(
+      `Last commit: ${workspace.lastCommit.shortSha} ${workspace.lastCommit.relativeTime} — ${workspace.lastCommit.subject}`,
+    );
+  }
+
+  if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
+    lines.push("Changes:");
+    status.sampleChanges.slice(0, 5).forEach((change) => {
+      lines.push(` • ${change}`);
+    });
+  }
+
+  return lines.join("\n");
+}
+
+function useStableCallback<T extends (...args: any[]) => any>(callback: T): T {
+  const ref = useRef<T>(callback);
+  ref.current = callback;
+  return useCallback(((...args: Parameters<T>) => ref.current(...args)) as T, []);
+}
+
+const TerminalPlaceholder: React.FC = () => (
+  <div className="terminal-placeholder">
+    Select a quick action or use the + button to start a terminal.
+  </div>
+);
+
+interface TerminalPanelProps {
+  workspacePath: string;
+  record: TerminalRecord;
+  isActive: boolean;
+  onStart: (workspacePath: string, record: TerminalRecord, container: HTMLDivElement) => void;
+  onDispose: (workspacePath: string, record: TerminalRecord) => void;
+}
+
+const TerminalPanel: React.FC<TerminalPanelProps> = ({ workspacePath, record, isActive, onStart, onDispose }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const onStartStable = useStableCallback(onStart);
+  const onDisposeStable = useStableCallback(onDispose);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    if (record.shouldStart || record.sessionId) {
+      onStartStable(workspacePath, record, container);
+    }
+  }, [record, workspacePath, onStartStable, record.shouldStart, record.sessionId]);
+
+  useEffect(
+    () => () => {
+      onDisposeStable(workspacePath, record);
+    },
+    [workspacePath, record, onDisposeStable],
+  );
+
+  return (
+    <div className={cx("terminal-panel", { "is-active": isActive })} data-key={record.key}>
+      <div ref={containerRef} className="terminal-view" />
+    </div>
+  );
+};
 
 function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
-  const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null);
-  const [environments, setEnvironments] = useState<SettingsResponse["environments"]>({});
-  const [activeEnvironment, setActiveEnvironment] = useState<string>("");
-  const [quickAccess, setQuickAccess] = useState<QuickAccessEntry[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [branchInput, setBranchInput] = useState("");
   const [baseInput, setBaseInput] = useState("");
   const [createInFlight, setCreateInFlight] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [environments, setEnvironments] = useState<SettingsResponse["environments"]>({});
+  const [activeEnvironment, setActiveEnvironment] = useState<string>("");
+  const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
+  const [workspaceOrder, setWorkspaceOrder] = useState<string[]>([]);
+  const [activeWorkspacePath, setActiveWorkspacePath] = useState<string | null>(null);
+  const workspaceTabsRef = useRef<Map<string, WorkspaceTabState>>(new Map());
+  const sessionIndexRef = useRef<Map<string, SessionIndexEntry>>(new Map());
+  const runtimeRef = useRef<Map<string, TerminalRuntime>>(new Map());
+  const [toastList, setToastList] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
+  const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
 
-  const [workspaceTerminals, setWorkspaceTerminals] = useState<WorkspaceTerminalMap>({});
-  const [activeSlots, setActiveSlots] = useState<ActiveSlotMap>({});
-  const sessionIndex = useRef(new Map<string, SessionIndexEntry>());
-
-  const selectedWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null,
-    [workspaces, selectedWorkspacePath],
-  );
-
-  const activeSlot = selectedWorkspacePath ? activeSlots[selectedWorkspacePath] ?? null : null;
-
-  const selectedTerminalEntries = selectedWorkspacePath
-    ? workspaceTerminals[selectedWorkspacePath] ?? {}
-    : {};
-
-  const activeTerminalEntry = activeSlot ? selectedTerminalEntries[activeSlot] ?? null : null;
-
-  const pushToast = useCallback((message: string, kind: Toast["kind"] = "info") => {
+  const pushToast = useCallback((message: string, kind: ToastKind = "info") => {
     toastIdRef.current += 1;
     const id = toastIdRef.current;
-    setToasts((prev) => [...prev, { id, kind, message }]);
+    setToastList((prev) => [...prev, { id, kind, message }]);
     setTimeout(() => {
-      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+      setToastList((prev) => prev.filter((toast) => toast.id !== id));
     }, kind === "error" ? 5600 : 4200);
   }, []);
 
-  const loadWorkspaces = useCallback(async () => {
-    setLoadingWorkspaces(true);
-    try {
-      const list = await window.workspaceAPI.list();
-      setWorkspaces(list);
-      if (list.length > 0 && !selectedWorkspacePath) {
-        setSelectedWorkspacePath(list[0].path);
+  const reopenWorkspaceTab = useCallback(
+    (workspace: WorkspaceSummary) => {
+      const existing = workspaceTabsRef.current.get(workspace.path);
+      if (!existing) {
+        return;
       }
+      existing.workspace = workspace;
+      forceRender();
+    },
+    [forceRender],
+  );
+
+  const loadWorkspaces = useCallback(async (): Promise<WorkspaceSummary[]> => {
+    setLoadingWorkspaces(true);
+    let list: WorkspaceSummary[] = [];
+    try {
+      list = await window.workspaceAPI.list();
+      setWorkspaces(list);
+      list.forEach((workspace) => reopenWorkspaceTab(workspace));
+      setActiveWorkspacePath((current) => {
+        if (list.length === 0) {
+          return null;
+        }
+        if (current && list.some((item) => item.path === current)) {
+          return current;
+        }
+        return list[0].path;
+      });
     } catch (error) {
       console.error("Failed to load workspaces", error);
       pushToast("Failed to load workspaces", "error");
     } finally {
       setLoadingWorkspaces(false);
     }
-  }, [pushToast, selectedWorkspacePath]);
+    return list;
+  }, [pushToast, reopenWorkspaceTab]);
 
   const loadSettings = useCallback(async () => {
     try {
       const response = await window.settingsAPI.listEnvironments();
       setEnvironments(response.environments);
       setActiveEnvironment(response.activeEnvironment);
-      setQuickAccess(response.quickAccess);
+      const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
+      defaultTerminalsRef.current = normalized;
     } catch (error) {
       console.error("Failed to load settings", error);
       pushToast("Failed to load settings", "error");
     }
   }, [pushToast]);
 
-  useEffect(() => {
-    void loadSettings();
-    void loadWorkspaces();
-  }, [loadSettings, loadWorkspaces]);
-
-  useEffect(() => {
-    const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
-      const meta = sessionIndex.current.get(payload.sessionId);
-      if (!meta) {
-        return;
-      }
-      setWorkspaceTerminals((prev) => {
-        const workspaceEntry = prev[meta.workspacePath];
-        if (!workspaceEntry) {
-          return prev;
-        }
-        const terminal = workspaceEntry[meta.slot];
-        if (!terminal) {
-          return prev;
-        }
-        const updatedLog = (terminal.log + payload.data).slice(-40000);
-        return {
-          ...prev,
-          [meta.workspacePath]: {
-            ...workspaceEntry,
-            [meta.slot]: {
-              ...terminal,
-              log: updatedLog,
-            },
-          },
-        };
-      });
-    });
-
-    const disposeExit = window.terminalAPI.onExit((payload: TerminalExitPayload) => {
-      const meta = sessionIndex.current.get(payload.sessionId);
-      if (!meta) {
-        return;
-      }
-      sessionIndex.current.delete(payload.sessionId);
-      setWorkspaceTerminals((prev) => {
-        const workspaceEntry = prev[meta.workspacePath];
-        if (!workspaceEntry) {
-          return prev;
-        }
-        const terminal = workspaceEntry[meta.slot];
-        if (!terminal) {
-          return prev;
-        }
-        const exitLine = `\nProcess exited${
-          payload.exitCode !== null ? ` with code ${payload.exitCode}` : ""
-        }${payload.signal ? ` (signal ${payload.signal})` : ""}.`;
-        return {
-          ...prev,
-          [meta.workspacePath]: {
-            ...workspaceEntry,
-            [meta.slot]: {
-              ...terminal,
-              lastExitCode: payload.exitCode,
-              lastSignal: payload.signal,
-              log: (terminal.log + exitLine).slice(-40000),
-            },
-          },
-        };
-      });
-    });
-
-    return () => {
-      disposeData();
-      disposeExit();
-    };
+  const generateEphemeralLabel = useCallback((workspaceState: WorkspaceTabState): string => {
+    const label = `Terminal ${workspaceState.ephemeralCounter}`;
+    workspaceState.ephemeralCounter += 1;
+    return label;
   }, []);
 
-  const hydrateWorkspaceTerminals = useCallback(async (workspacePath: string) => {
-    if (workspaceTerminals[workspacePath]) {
+  const generateEphemeralKey = useCallback((workspaceState: WorkspaceTabState): string => {
+    const seen = workspaceState.terminals;
+    const hasRandomUUID = typeof window.crypto?.randomUUID === "function";
+    let candidate = "";
+    let attempts = 0;
+    do {
+      if (hasRandomUUID) {
+        candidate = `custom-${window.crypto.randomUUID()}`;
+      } else {
+        const salt = Math.floor(Math.random() * 1e6 + attempts);
+        candidate = `custom-${Date.now().toString(36)}-${salt.toString(36)}`;
+      }
+      attempts += 1;
+    } while (seen.has(candidate));
+    return candidate;
+  }, []);
+
+  const registerEphemeralLabel = useCallback((workspaceState: WorkspaceTabState, label: string) => {
+    if (!label) {
       return;
     }
-    try {
-      const state = await window.terminalAPI.getWorkspaceState(workspacePath);
-      setWorkspaceTerminals((prev) => ({
-        ...prev,
-        [workspacePath]: Object.fromEntries(
-          Object.entries(state.terminals || {}).map(([slot, info]) => [
-            slot,
-            {
-              sessionId: null,
-              log: info.history || "",
-              quickCommandExecuted: info.quickCommandExecuted,
-              lastExitCode: info.lastExitCode,
-              lastSignal: info.lastSignal,
-              label: info.label,
-            },
-          ]),
-        ),
-      }));
-      setActiveSlots((prev) => ({
-        ...prev,
-        [workspacePath]: state.activeTerminal ?? Object.keys(state.terminals || {})[0] ?? null,
-      }));
-    } catch (error) {
-      console.error("Failed to load workspace terminals", error);
+    const match = /([0-9]+)\s*$/.exec(label);
+    if (!match) {
+      return;
     }
-  }, [workspaceTerminals]);
+    const value = Number.parseInt(match[1], 10);
+    if (Number.isFinite(value) && value + 1 > workspaceState.ephemeralCounter) {
+      workspaceState.ephemeralCounter = value + 1;
+    }
+  }, []);
 
-  const handleSelectWorkspace = useCallback(
-    async (workspace: WorkspaceSummary) => {
-      setSelectedWorkspacePath(workspace.path);
-      await hydrateWorkspaceTerminals(workspace.path);
+  const setupTerminalRecord = useCallback(
+    (workspaceState: WorkspaceTabState, definition: TerminalDefinition): TerminalRecord => {
+      const existing = workspaceState.terminals.get(definition.key);
+      if (existing) {
+        existing.label = definition.label;
+        existing.quickCommand = definition.quickCommand;
+        existing.isEphemeral = definition.isEphemeral;
+        return existing;
+      }
+
+      const saved = workspaceState.savedState.terminals?.[definition.key];
+      const label =
+        (saved?.label && typeof saved.label === "string" && saved.label.trim()) || definition.label || definition.key;
+
+      const record: TerminalRecord = {
+        key: definition.key,
+        label,
+        quickCommand: definition.quickCommand,
+        isEphemeral: definition.isEphemeral,
+        sessionId: null,
+        quickCommandExecuted: Boolean(saved?.quickCommandExecuted),
+        lastExitCode: saved?.lastExitCode ?? null,
+        lastSignal: saved?.lastSignal ?? null,
+        savedHistory: saved?.history ?? "",
+        ignoreSavedHistory: false,
+        closed: false,
+        shouldStart: false,
+      };
+
+      workspaceState.terminals.set(definition.key, record);
+      workspaceState.terminalOrder.push(definition.key);
+
+      if (workspaceState.savedState.terminals) {
+        workspaceState.savedState.terminals[definition.key] = {
+          ...(workspaceState.savedState.terminals[definition.key] || {}),
+          label: record.label,
+        };
+      }
+
+      if (record.isEphemeral) {
+        registerEphemeralLabel(workspaceState, record.label);
+      }
+
+      return record;
     },
-    [hydrateWorkspaceTerminals],
+    [registerEphemeralLabel],
   );
 
-  useEffect(() => {
-    if (selectedWorkspace) {
-      void hydrateWorkspaceTerminals(selectedWorkspace.path);
-    }
-  }, [hydrateWorkspaceTerminals, selectedWorkspace]);
+  const disposeTerminalRuntime = useCallback(
+    (workspacePath: string, record: TerminalRecord, preserveSession: boolean) => {
+      const key = runtimeKey(workspacePath, record.key);
+      const runtime = runtimeRef.current.get(key);
+      if (runtime) {
+        runtime.resizeObserver.disconnect();
+        runtime.terminal.dispose();
+        runtimeRef.current.delete(key);
+      }
+      if (record.sessionId) {
+        sessionIndexRef.current.delete(record.sessionId);
+        void window.terminalAPI
+          .dispose(record.sessionId, { preserve: preserveSession })
+          .catch((error) => console.warn("Failed to dispose terminal", error));
+        record.sessionId = null;
+      }
+      record.closed = true;
+    },
+    [],
+  );
 
-  const ensureWorkspaceSelected = useCallback(() => {
-    if (!selectedWorkspace) {
-      pushToast("Select a workspace first", "info");
-      return false;
-    }
-    return true;
-  }, [pushToast, selectedWorkspace]);
+  const setActiveTerminal = useCallback(
+    (workspaceState: WorkspaceTabState, terminalKey: string | null) => {
+      workspaceState.activeTerminalKey = terminalKey;
+      forceRender();
+      void window.terminalAPI
+        .setActiveTerminal(workspaceState.workspace.path, terminalKey)
+        .catch((error) => console.warn("Failed to persist active terminal", error));
+    },
+    [],
+  );
+
+  const handleTerminalClose = useCallback(
+    (workspacePath: string, terminalKey: string) => {
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) {
+        return;
+      }
+      const record = workspaceState.terminals.get(terminalKey);
+      if (!record) {
+        return;
+      }
+
+      const wasActive = workspaceState.activeTerminalKey === terminalKey;
+      disposeTerminalRuntime(workspacePath, record, !record.isEphemeral);
+
+      if (record.isEphemeral) {
+        workspaceState.terminals.delete(terminalKey);
+        workspaceState.terminalOrder = workspaceState.terminalOrder.filter((key) => key !== terminalKey);
+        if (workspaceState.savedState.terminals) {
+          delete workspaceState.savedState.terminals[terminalKey];
+        }
+      } else {
+        record.savedHistory = "";
+        record.ignoreSavedHistory = true;
+      }
+
+      if (wasActive) {
+        const fallback = workspaceState.terminalOrder.find((key) => key !== terminalKey) ?? null;
+        setActiveTerminal(workspaceState, fallback);
+      } else {
+        forceRender();
+      }
+    },
+    [disposeTerminalRuntime, setActiveTerminal],
+  );
+
+  const startTerminalSession = useCallback(
+    async (workspaceState: WorkspaceTabState, record: TerminalRecord, container: HTMLDivElement) => {
+      const key = runtimeKey(workspaceState.workspace.path, record.key);
+      if (runtimeRef.current.has(key) && record.sessionId && !record.closed) {
+        return;
+      }
+
+      record.shouldStart = false;
+      record.closed = false;
+
+      const terminal = new Terminal({
+        convertEol: true,
+        fontSize: 12,
+        fontFamily: TERMINAL_FONT_FAMILY,
+        theme: TERMINAL_THEME,
+        scrollback: 4000,
+      });
+
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      terminal.open(container);
+      fitAddon.fit();
+
+      let sessionInfo: EnsureTerminalResponse;
+      try {
+        sessionInfo = await window.terminalAPI.ensureSession({
+          workspacePath: workspaceState.workspace.path,
+          slot: record.key,
+          cols: terminal.cols,
+          rows: terminal.rows,
+          label: record.label,
+        });
+      } catch (error) {
+        console.error("Failed to create terminal session", error);
+        pushToast(`Failed to start terminal '${record.label}'`, "error");
+        terminal.dispose();
+        record.closed = true;
+        forceRender();
+        return;
+      }
+
+      record.sessionId = sessionInfo.sessionId;
+      record.quickCommandExecuted = record.quickCommandExecuted || Boolean(sessionInfo.quickCommandExecuted);
+      record.lastExitCode = sessionInfo.lastExitCode ?? null;
+      record.lastSignal = sessionInfo.lastSignal ?? null;
+      record.closed = false;
+      record.savedHistory = "";
+
+      sessionIndexRef.current.set(sessionInfo.sessionId, {
+        workspacePath: workspaceState.workspace.path,
+        terminalKey: record.key,
+      });
+
+      terminal.onData((data) => {
+        if (record.sessionId) {
+          window.terminalAPI.write(record.sessionId, data);
+        }
+      });
+
+      const resizeObserver = new ResizeObserver(() => {
+        fitAddon.fit();
+        if (record.sessionId && !record.closed) {
+          void window.terminalAPI
+            .resize(record.sessionId, terminal.cols, terminal.rows)
+            .catch((error) => console.warn("Failed to resize terminal", error));
+        }
+      });
+      resizeObserver.observe(container);
+
+      runtimeRef.current.set(key, { terminal, fitAddon, resizeObserver, container });
+
+      void window.terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows).catch((error) => {
+        console.warn("Failed to perform initial resize", error);
+      });
+
+      const historySource = record.ignoreSavedHistory ? sessionInfo.history : record.savedHistory || sessionInfo.history;
+      if (historySource) {
+        terminal.write(historySource);
+      }
+      record.ignoreSavedHistory = false;
+      record.savedHistory = "";
+
+      if (workspaceState.activeTerminalKey === record.key) {
+        requestAnimationFrame(() => {
+          fitAddon.fit();
+          if (!record.closed) {
+            terminal.focus();
+          }
+        });
+      }
+
+      if (record.quickCommand && !record.quickCommandExecuted) {
+        setTimeout(() => {
+          if (!record.sessionId) return;
+          window.terminalAPI.write(record.sessionId, `${record.quickCommand}\n`);
+          record.quickCommandExecuted = true;
+          void window.terminalAPI
+            .markQuickCommand(workspaceState.workspace.path, record.key)
+            .catch((error) => console.warn("Failed to mark quick command as executed", error));
+          forceRender();
+        }, 30);
+      }
+
+      forceRender();
+    },
+    [pushToast],
+  );
+
+  const handleTerminalTabClick = useCallback(
+    (workspacePath: string, terminalKey: string) => {
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) return;
+      const record = workspaceState.terminals.get(terminalKey);
+      if (!record) return;
+
+      if (!record.sessionId && !record.shouldStart) {
+        record.shouldStart = true;
+      }
+
+      setActiveTerminal(workspaceState, terminalKey);
+    },
+    [setActiveTerminal],
+  );
+
+  const handleAddTerminal = useCallback(
+    (workspacePath: string) => {
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) return;
+      const key = generateEphemeralKey(workspaceState);
+      const label = generateEphemeralLabel(workspaceState);
+      const record = setupTerminalRecord(workspaceState, {
+        key,
+        label,
+        quickCommand: null,
+        isEphemeral: true,
+      });
+      record.shouldStart = true;
+      setActiveTerminal(workspaceState, key);
+      forceRender();
+    },
+    [generateEphemeralKey, generateEphemeralLabel, setActiveTerminal, setupTerminalRecord],
+  );
+
+  const ensureWorkspaceTab = useCallback(
+    async (workspace: WorkspaceSummary): Promise<WorkspaceTabState> => {
+      const existing = workspaceTabsRef.current.get(workspace.path);
+      if (existing) {
+        existing.workspace = workspace;
+        setActiveWorkspacePath(workspace.path);
+        return existing;
+      }
+
+      let savedStateRaw: WorkspaceStateResponse | null = null;
+      try {
+        savedStateRaw = await window.terminalAPI.getWorkspaceState(workspace.path);
+      } catch (error) {
+        console.warn("Failed to fetch saved workspace terminals", error);
+      }
+      const savedState = ensureSavedWorkspaceState(workspace.path, savedStateRaw);
+
+      const workspaceState: WorkspaceTabState = {
+        workspace,
+        terminalOrder: [],
+        terminals: new Map(),
+        activeTerminalKey: savedState.activeTerminal ?? null,
+        savedState,
+        ephemeralCounter: 1,
+      };
+
+      const baseDefinitions = defaultTerminalsRef.current.length
+        ? defaultTerminalsRef.current
+        : normaliseQuickAccessList([], { fallbackToDefault: true });
+      baseDefinitions.forEach((definition) => {
+        setupTerminalRecord(workspaceState, definition);
+      });
+
+      if (savedState.terminals) {
+        Object.entries(savedState.terminals).forEach(([key, value]) => {
+          if (workspaceState.terminals.has(key)) {
+            const existingRecord = workspaceState.terminals.get(key);
+            if (existingRecord && value?.label) {
+              existingRecord.label = value.label;
+            }
+            return;
+          }
+          const label =
+            value?.label && typeof value.label === "string" && value.label.trim()
+              ? value.label.trim()
+              : generateEphemeralLabel(workspaceState);
+          setupTerminalRecord(workspaceState, {
+            key,
+            label,
+            quickCommand: null,
+            isEphemeral: true,
+          });
+        });
+      }
+
+      workspaceTabsRef.current.set(workspace.path, workspaceState);
+      setWorkspaceOrder((prev) => [...prev, workspace.path]);
+      setActiveWorkspacePath(workspace.path);
+      forceRender();
+
+      return workspaceState;
+    },
+    [generateEphemeralLabel, setupTerminalRecord],
+  );
+
+  const handleWorkspaceSelect = useCallback(
+    async (workspace: WorkspaceSummary) => {
+      if (workspace.kind === "folder") {
+        return;
+      }
+      const state = await ensureWorkspaceTab(workspace);
+      if (state.activeTerminalKey) {
+        setActiveTerminal(state, state.activeTerminalKey);
+      }
+    },
+    [ensureWorkspaceTab, setActiveTerminal],
+  );
+
+  const closeWorkspace = useCallback(
+    (workspacePath: string, options: { preserveState?: boolean } = {}) => {
+      const { preserveState = false } = options;
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) {
+        return;
+      }
+
+      workspaceState.terminals.forEach((record) => {
+        disposeTerminalRuntime(workspacePath, record, preserveState || !record.isEphemeral);
+      });
+
+      if (!preserveState) {
+        void window.terminalAPI
+          .clearWorkspaceState(workspacePath)
+          .catch((error) => console.warn("Failed to clear workspace terminal state", error));
+      }
+
+      workspaceTabsRef.current.delete(workspacePath);
+      setWorkspaceOrder((prev) => prev.filter((path) => path !== workspacePath));
+
+      if (activeWorkspacePath === workspacePath) {
+        const next = workspaceOrder.find((path) => path !== workspacePath);
+        setActiveWorkspacePath(next ?? null);
+      }
+
+      forceRender();
+    },
+    [activeWorkspacePath, disposeTerminalRuntime, workspaceOrder],
+  );
+
+  const handleEnvironmentChange = useCallback(
+    async (name: string) => {
+      if (!name || name === activeEnvironment) {
+        return;
+      }
+      try {
+        const response = await window.settingsAPI.setActiveEnvironment({ name });
+        setEnvironments(response.environments);
+        setActiveEnvironment(response.activeEnvironment);
+        const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
+        defaultTerminalsRef.current = normalized;
+
+        workspaceTabsRef.current.forEach((state, path) => {
+          closeWorkspace(path, { preserveState: true });
+        });
+        workspaceTabsRef.current.clear();
+        setWorkspaceOrder([]);
+        setActiveWorkspacePath(null);
+        pushToast(`Switched to ${name}`, "success");
+        await loadWorkspaces();
+      } catch (error) {
+        console.error("Failed to switch environment", error);
+        pushToast("Failed to switch environment", "error");
+      }
+    },
+    [activeEnvironment, closeWorkspace, loadWorkspaces, pushToast],
+  );
+
+  const restoreWorkspacesFromStore = useCallback(
+    async (workspaceList: WorkspaceSummary[]) => {
+      let savedWorkspacePaths: string[] = [];
+      try {
+        const raw = await window.terminalAPI.listSavedWorkspaces();
+        if (Array.isArray(raw)) {
+          savedWorkspacePaths = raw.filter((entry): entry is string => typeof entry === "string");
+        }
+      } catch (error) {
+        console.warn("Failed to restore workspace terminals", error);
+      }
+      if (!savedWorkspacePaths.length) {
+        return;
+      }
+      for (const workspacePath of savedWorkspacePaths) {
+        const workspace = workspaceList.find((item) => item.path === workspacePath);
+        if (!workspace) continue;
+        const state = await ensureWorkspaceTab(workspace);
+        const savedState = state.savedState;
+        Object.entries(savedState.terminals ?? {}).forEach(([key, terminalState]) => {
+          const record = state.terminals.get(key);
+          if (!record) {
+            return;
+          }
+          if (typeof terminalState?.history === "string") {
+            record.savedHistory = terminalState.history;
+          }
+          if (typeof terminalState?.quickCommandExecuted === "boolean") {
+            record.quickCommandExecuted = terminalState.quickCommandExecuted;
+          }
+          record.lastExitCode = terminalState?.lastExitCode ?? record.lastExitCode;
+          record.lastSignal = terminalState?.lastSignal ?? record.lastSignal;
+          const shouldAutoLaunch =
+            record.quickCommandExecuted || (record.savedHistory && record.savedHistory.length > 0);
+          if (shouldAutoLaunch) {
+            record.shouldStart = true;
+          }
+        });
+
+        const targetActive =
+          (savedState.activeTerminal && state.terminals.has(savedState.activeTerminal)
+            ? savedState.activeTerminal
+            : state.terminalOrder[0]) ?? null;
+        if (targetActive) {
+          setActiveTerminal(state, targetActive);
+          const record = state.terminals.get(targetActive);
+          if (record) {
+            record.shouldStart = record.shouldStart || Boolean(record.quickCommand || record.savedHistory);
+          }
+        }
+      }
+      forceRender();
+    },
+    [ensureWorkspaceTab, setActiveTerminal],
+  );
 
   const handleCreateWorkspace = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -280,12 +901,15 @@ function App(): JSX.Element {
       }
       setCreateInFlight(true);
       try {
-        const workspace = await window.workspaceAPI.create({ branch, baseRef: baseRef || undefined });
+        const workspace = await window.workspaceAPI.create({
+          branch,
+          baseRef: baseRef || undefined,
+        });
         pushToast(`Workspace '${workspace.branch ?? workspace.relativePath}' ready`, "success");
         setBranchInput("");
         setBaseInput("");
         await loadWorkspaces();
-        setSelectedWorkspacePath(workspace.path);
+        await handleWorkspaceSelect(workspace);
       } catch (error) {
         console.error("Failed to create workspace", error);
         pushToast("Failed to create workspace", "error");
@@ -293,7 +917,7 @@ function App(): JSX.Element {
         setCreateInFlight(false);
       }
     },
-    [baseInput, branchInput, loadWorkspaces, pushToast],
+    [baseInput, branchInput, handleWorkspaceSelect, loadWorkspaces, pushToast],
   );
 
   const handleRefreshAll = useCallback(async () => {
@@ -306,157 +930,147 @@ function App(): JSX.Element {
     }
   }, [loadWorkspaces, pushToast]);
 
-  const handleRefreshWorkspace = useCallback(async () => {
-    if (!ensureWorkspaceSelected() || !selectedWorkspace) {
-      return;
-    }
-    try {
-      const refreshed = await window.workspaceAPI.refresh({ path: selectedWorkspace.path });
-      setWorkspaces((prev) =>
-        prev.map((workspace) => (workspace.path === refreshed.path ? refreshed : workspace)),
-      );
-      pushToast("Workspace refreshed", "success");
-    } catch (error) {
-      console.error("Failed to refresh workspace", error);
-      pushToast("Failed to refresh workspace", "error");
-    }
-  }, [ensureWorkspaceSelected, pushToast, selectedWorkspace]);
+  const handleRefreshWorkspace = useCallback(
+    async (workspace: WorkspaceSummary) => {
+      try {
+        const refreshed = await window.workspaceAPI.refresh({ path: workspace.path });
+        setWorkspaces((prev) => prev.map((item) => (item.path === refreshed.path ? refreshed : item)));
+        const state = workspaceTabsRef.current.get(workspace.path);
+        if (state) {
+          state.workspace = refreshed;
+          forceRender();
+        }
+        pushToast("Workspace refreshed", "success");
+      } catch (error) {
+        console.error("Failed to refresh workspace", error);
+        pushToast("Failed to refresh workspace", "error");
+      }
+    },
+    [pushToast],
+  );
 
-  const handleDeleteWorkspace = useCallback(async () => {
-    if (!ensureWorkspaceSelected() || !selectedWorkspace) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Delete workspace '${selectedWorkspace.branch ?? selectedWorkspace.relativePath}'?`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    try {
-      const result = await window.workspaceAPI.delete({ path: selectedWorkspace.path });
-      if (!result.success) {
-        pushToast(result.message ?? "Failed to delete workspace", "error");
+  const handleDeleteWorkspace = useCallback(
+    async (workspace: WorkspaceSummary) => {
+      const confirmed = window.confirm(
+        `Delete workspace '${workspace.branch ?? workspace.relativePath ?? workspace.path}'?`,
+      );
+      if (!confirmed) {
         return;
       }
-      pushToast("Workspace deleted", "success");
-      sessionIndex.current.forEach((value, key) => {
-        if (value.workspacePath === selectedWorkspace.path) {
-          sessionIndex.current.delete(key);
-        }
-      });
-      setWorkspaceTerminals((prev) => {
-        const clone = { ...prev };
-        delete clone[selectedWorkspace.path];
-        return clone;
-      });
-      setActiveSlots((prev) => {
-        const clone = { ...prev };
-        delete clone[selectedWorkspace.path];
-        return clone;
-      });
-      setSelectedWorkspacePath(null);
-      await loadWorkspaces();
-    } catch (error) {
-      console.error("Failed to delete workspace", error);
-      pushToast("Failed to delete workspace", "error");
-    }
-  }, [ensureWorkspaceSelected, loadWorkspaces, pushToast, selectedWorkspace]);
-
-  const handleEnvironmentChange = useCallback(
-    async (name: string) => {
-      setActiveEnvironment(name);
       try {
-        const response = await window.settingsAPI.setActiveEnvironment({ name });
-        setEnvironments(response.environments);
-        setActiveEnvironment(response.activeEnvironment);
-        setQuickAccess(response.quickAccess);
-        sessionIndex.current.clear();
-        setWorkspaceTerminals({});
-        setActiveSlots({});
-        setSelectedWorkspacePath(null);
-        pushToast(`Environment switched to ${name}`, "success");
+        const result = await window.workspaceAPI.delete({ path: workspace.path });
+        if (!result.success) {
+          pushToast(result.message ?? "Failed to delete workspace", "error");
+          return;
+        }
+        pushToast("Workspace deleted", "success");
+        closeWorkspace(workspace.path);
         await loadWorkspaces();
       } catch (error) {
-        console.error("Failed to switch environment", error);
-        pushToast("Failed to switch environment", "error");
+        console.error("Failed to delete workspace", error);
+        pushToast("Failed to delete workspace", "error");
       }
     },
-    [loadWorkspaces, pushToast],
+    [closeWorkspace, loadWorkspaces, pushToast],
   );
 
-  const registerSession = useCallback((result: EnsureTerminalResponse) => {
-    sessionIndex.current.set(result.sessionId, { workspacePath: result.workspacePath, slot: result.slot });
-  }, []);
+  useEffect(() => {
+    void (async () => {
+      await loadSettings();
+      const list = await loadWorkspaces();
+      await restoreWorkspacesFromStore(list);
+    })();
+  }, [loadSettings, loadWorkspaces, restoreWorkspacesFromStore]);
 
-  const handleRunQuickCommand = useCallback(
-    async (entry: QuickAccessEntry) => {
-      if (!ensureWorkspaceSelected() || !selectedWorkspace) {
+  useEffect(() => {
+    const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
+      const meta = sessionIndexRef.current.get(payload.sessionId);
+      if (!meta) return;
+      const workspaceState = workspaceTabsRef.current.get(meta.workspacePath);
+      if (!workspaceState) return;
+      const record = workspaceState.terminals.get(meta.terminalKey);
+      if (!record || record.closed) {
+        if (record) {
+          record.savedHistory = (record.savedHistory + payload.data).slice(-TERMINAL_HISTORY_LIMIT);
+        }
         return;
       }
-      try {
-        const result = await window.terminalAPI.ensureSession({
-          workspacePath: selectedWorkspace.path,
-          slot: entry.key,
-          label: entry.label,
-        });
-        registerSession(result);
-        setWorkspaceTerminals((prev) => {
-          const workspaceEntry = prev[selectedWorkspace.path] ?? {};
-          return {
-            ...prev,
-            [selectedWorkspace.path]: {
-              ...workspaceEntry,
-              [entry.key]: {
-                sessionId: result.sessionId,
-                log: result.history || "",
-                quickCommandExecuted: result.quickCommandExecuted,
-                lastExitCode: result.lastExitCode,
-                lastSignal: result.lastSignal,
-                label: entry.label,
-              },
-            },
-          };
-        });
-        setActiveSlots((prev) => ({ ...prev, [selectedWorkspace.path]: entry.key }));
-        void window.terminalAPI.setActiveTerminal(selectedWorkspace.path, entry.key);
-        const commandText = `${entry.quickCommand.trim()}\r`;
-        window.terminalAPI.write(result.sessionId, commandText);
-        await window.terminalAPI.markQuickCommand(selectedWorkspace.path, entry.key);
-        setWorkspaceTerminals((prev) => {
-          const workspaceEntry = prev[selectedWorkspace.path] ?? {};
-          const terminal = workspaceEntry[entry.key];
-          if (!terminal) {
-            return prev;
-          }
-          return {
-            ...prev,
-            [selectedWorkspace.path]: {
-              ...workspaceEntry,
-              [entry.key]: {
-                ...terminal,
-                quickCommandExecuted: true,
-                log: (terminal.log + `\n$ ${entry.quickCommand}\n`).slice(-40000),
-              },
-            },
-          };
-        });
-        pushToast(`Quick command '${entry.label}' sent`, "success");
-      } catch (error) {
-        console.error("Failed to run quick command", error);
-        pushToast("Failed to run quick command", "error");
+      const runtime = runtimeRef.current.get(runtimeKey(meta.workspacePath, meta.terminalKey));
+      if (runtime) {
+        runtime.terminal.write(payload.data);
+      } else {
+        record.savedHistory = (record.savedHistory + payload.data).slice(-TERMINAL_HISTORY_LIMIT);
       }
-    },
-    [ensureWorkspaceSelected, pushToast, registerSession, selectedWorkspace],
+    });
+
+    const disposeExit = window.terminalAPI.onExit((payload: TerminalExitPayload) => {
+      const meta = sessionIndexRef.current.get(payload.sessionId);
+      if (!meta) return;
+      const workspaceState = workspaceTabsRef.current.get(meta.workspacePath);
+      if (!workspaceState) return;
+      const record = workspaceState.terminals.get(meta.terminalKey);
+      if (!record || record.closed) return;
+      record.closed = true;
+      record.lastExitCode = payload.exitCode ?? null;
+      record.lastSignal = payload.signal ?? null;
+      const runtime = runtimeRef.current.get(runtimeKey(meta.workspacePath, meta.terminalKey));
+      if (runtime) {
+        runtime.terminal.write(
+          `\r\n\x1b[38;5;110mProcess exited with code ${payload.exitCode ?? 0}${
+            payload.signal ? ` (signal ${payload.signal})` : ""
+          }\x1b[0m\r\n`,
+        );
+      }
+      forceRender();
+    });
+
+    return () => {
+      disposeData?.();
+      disposeExit?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (!activeWorkspacePath) {
+        return;
+      }
+      const workspaceState = workspaceTabsRef.current.get(activeWorkspacePath);
+      if (!workspaceState || !workspaceState.activeTerminalKey) {
+        return;
+      }
+      const record = workspaceState.terminals.get(workspaceState.activeTerminalKey);
+      if (!record || record.closed) {
+        return;
+      }
+      const runtime = runtimeRef.current.get(runtimeKey(activeWorkspacePath, workspaceState.activeTerminalKey));
+      if (!runtime) return;
+      runtime.fitAddon.fit();
+      if (record.sessionId) {
+        void window.terminalAPI
+          .resize(record.sessionId, runtime.terminal.cols, runtime.terminal.rows)
+          .catch((error) => console.warn("Failed to resize terminal", error));
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [activeWorkspacePath, renderTicker]);
+
+  const workspaceList = useMemo(
+    () =>
+      [...workspaces].sort((a, b) => {
+        const aKey = a.branch || a.relativePath || a.path;
+        const bKey = b.branch || b.relativePath || b.path;
+        const branchCompare = aKey.localeCompare(bKey);
+        if (branchCompare !== 0) return branchCompare;
+        return a.path.localeCompare(b.path);
+      }),
+    [workspaces],
   );
 
-  const handleSelectSlot = useCallback(
-    (slot: string) => {
-      if (!selectedWorkspace) return;
-      setActiveSlots((prev) => ({ ...prev, [selectedWorkspace.path]: slot }));
-      void window.terminalAPI.setActiveTerminal(selectedWorkspace.path, slot);
-    },
-    [selectedWorkspace],
-  );
+  const activeWorkspaceState = activeWorkspacePath
+    ? workspaceTabsRef.current.get(activeWorkspacePath) ?? null
+    : null;
 
   return (
     <div className="app-shell">
@@ -525,145 +1139,242 @@ function App(): JSX.Element {
           </button>
         </form>
         <p className="hint">
-          Workspaces are created under the path configured in your settings file. New branches fall back to
-          <code> origin/develop </code> when no remote exists.
+          New worktrees are created alongside your configured workspace root. Branch names are converted to folder
+          friendly paths automatically.
         </p>
       </section>
 
-      <main className="workspace-area">
+      <main className="content-shell">
         <aside className="workspace-sidebar">
           <header className="workspace-sidebar-header">
-            <span>Workspaces</span>
+            <h2>Workspaces</h2>
+            <span>{loadingWorkspaces ? "Loading…" : `${workspaceList.length} found`}</span>
           </header>
-          <div id="workspace-list" className="workspace-list" aria-live="polite">
+          <div id="workspace-list" className="workspace-list">
             {loadingWorkspaces ? (
-              <div className="workspace-list-empty">Loading workspaces…</div>
-            ) : workspaces.length === 0 ? (
-              <div className="workspace-list-empty">No workspaces yet</div>
+              <div className="empty-state">Loading workspaces…</div>
+            ) : workspaceList.length === 0 ? (
+              <div className="empty-state">No worktrees found. Create one to get started.</div>
             ) : (
-              workspaces.map((workspace) => {
-                const isSelected = workspace.path === selectedWorkspacePath;
+              workspaceList.map((workspace) => {
+                const isSelected = workspace.path === activeWorkspacePath;
+                const statusIcons = buildStatusIcons(workspace);
+                const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
                 return (
-                  <button
+                  <div
                     key={workspace.path}
-                    type="button"
-                    className={cx("workspace-list-item", { selected: isSelected })}
-                    onClick={() => handleSelectWorkspace(workspace)}
+                    className={cx("workspace-row", workspace.kind, { "is-active": isSelected })}
+                    data-path={workspace.path}
+                    title={buildStatusTooltip(workspace.status)}
+                    onClick={(event) => {
+                      const target = event.target as HTMLElement;
+                      if (target.closest("button")) {
+                        return;
+                      }
+                      void handleWorkspaceSelect(workspace);
+                    }}
                   >
-                    <span className="workspace-item-name">{workspace.branch ?? workspace.relativePath}</span>
-                    <span className="workspace-item-meta">{formatSummary(workspace)}</span>
-                  </button>
+                    <div className="workspace-primary">
+                      <span className="workspace-marker" />
+                      <span className="workspace-name">{branchLabel}</span>
+                    </div>
+                    <div className="workspace-icons">
+                      {statusIcons.map((icon, index) => (
+                        <span key={`${icon.text}-${index}`} className={icon.className} title={icon.tooltip}>
+                          {icon.text}
+                        </span>
+                      ))}
+                    </div>
+                    {workspace.kind === "worktree" && (
+                      <div className="workspace-row-actions">
+                        <button
+                          className="row-icon-button"
+                          type="button"
+                          aria-label="Rescan workspace"
+                          title="Rescan workspace"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleRefreshWorkspace(workspace);
+                          }}
+                        >
+                          ⟳
+                        </button>
+                        <button
+                          className="row-icon-button danger"
+                          type="button"
+                          aria-label="Delete workspace"
+                          title="Delete workspace"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDeleteWorkspace(workspace);
+                          }}
+                        >
+                          ✖
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 );
               })
             )}
           </div>
         </aside>
-        <section id="workspace-detail" className="workspace-detail">
-          {!selectedWorkspace ? (
-            <div id="workspace-detail-placeholder" className="detail-placeholder">
-              <h2>Workspace Details</h2>
-              <p>Select a workspace from the list to see more information.</p>
-            </div>
-          ) : (
-            <div className="workspace-detail-content">
-              <header className="workspace-detail-header">
-                <div>
-                  <h2>{selectedWorkspace.branch ?? selectedWorkspace.relativePath}</h2>
-                  <p className="workspace-path">{selectedWorkspace.path}</p>
-                </div>
-                <div className="workspace-detail-actions">
-                  <button className="ghost-button" type="button" onClick={handleRefreshWorkspace}>
-                    Refresh
-                  </button>
-                  <button className="danger-button" type="button" onClick={handleDeleteWorkspace}>
-                    Delete
-                  </button>
-                </div>
-              </header>
 
-              <section className="workspace-summary">
-                <h3>Status</h3>
-                <p>{formatSummary(selectedWorkspace)}</p>
-                <h3>Last commit</h3>
-                <p>{formatCommit(selectedWorkspace)}</p>
-                {selectedWorkspace.status.sampleChanges.length > 0 && (
-                  <div className="workspace-changes">
-                    <h4>Recent changes</h4>
-                    <ul>
-                      {selectedWorkspace.status.sampleChanges.map((change) => (
-                        <li key={change}>{change}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </section>
+        <section id="workspace-tabs" className={cx("workspace-detail", { "is-empty": !activeWorkspaceState })}>
+          <div className="workspace-tab-bar">
+            {workspaceOrder.map((path) => {
+              const state = workspaceTabsRef.current.get(path);
+              if (!state) return null;
+              const label = state.workspace.branch || state.workspace.relativePath || state.workspace.path;
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  className={cx("workspace-tab", { "is-active": activeWorkspacePath === path })}
+                  onClick={() => setActiveWorkspacePath(path)}
+                  title={`${label}\n${state.workspace.path}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
 
-              <section className="workspace-terminals">
-                <header>
-                  <h3>Quick commands</h3>
-                </header>
-                {quickAccess.length === 0 ? (
-                  <p className="workspace-terminals-empty">No quick commands configured.</p>
-                ) : (
-                  <ul className="quick-command-list">
-                    {quickAccess.map((entry) => {
-                      const terminalEntry = selectedTerminalEntries[entry.key];
-                      const isActive = activeSlot === entry.key;
-                      return (
-                        <li key={entry.key} className={cx({ active: isActive })}>
-                          <div className="quick-command-row">
-                            <div className="quick-command-details">
-                              <strong>{entry.label}</strong>
-                              <span className="quick-command-meta">{entry.quickCommand}</span>
-                            </div>
-                            <div className="quick-command-actions">
-                              <button
-                                type="button"
-                                className="primary-button"
-                                onClick={() => handleRunQuickCommand(entry)}
-                              >
-                                Run
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost-button"
-                                onClick={() => handleSelectSlot(entry.key)}
-                              >
-                                View log
-                              </button>
-                            </div>
+          <div className="workspace-tab-panels">
+            {!activeWorkspaceState ? (
+              <div id="workspace-detail-placeholder" className="detail-placeholder">
+                <h2>Workspace Details</h2>
+                <p>Select a workspace from the list to open terminals and quick commands.</p>
+              </div>
+            ) : (
+              workspaceOrder.map((path) => {
+                const state = workspaceTabsRef.current.get(path);
+                if (!state) return null;
+                const isActive = path === activeWorkspacePath;
+                const workspace = state.workspace;
+                return (
+                  <div
+                    key={path}
+                    className={cx("workspace-panel", { "is-active": isActive })}
+                    data-path={workspace.path}
+                  >
+                    <header className="workspace-detail-header">
+                      <div className="workspace-heading">
+                        <div className="workspace-title-row">
+                          <h2>{workspace.branch ?? workspace.relativePath ?? workspace.path}</h2>
+                          <span
+                            className="workspace-info-badge"
+                            title={buildWorkspaceDetailTooltip(workspace)}
+                            aria-label="Workspace status details"
+                          >
+                            ⓘ
+                          </span>
+                        </div>
+                        <p className="workspace-path">{workspace.path}</p>
+                      </div>
+                      <div className="workspace-detail-actions">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={() => void handleRefreshWorkspace(workspace)}
+                        >
+                          Refresh
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => void handleDeleteWorkspace(workspace)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </header>
+
+                    <div className="terminal-tabs">
+                      {state.terminalOrder.map((key) => {
+                        const record = state.terminals.get(key);
+                        if (!record) return null;
+                        const active = state.activeTerminalKey === key;
+                        return (
+                          <div
+                            key={key}
+                            className={cx("terminal-tab", {
+                              "is-active": active,
+                              "is-exited": record.closed && !record.isEphemeral,
+                              "is-ephemeral": record.isEphemeral,
+                            })}
+                            data-key={key}
+                          >
+                            <button
+                              type="button"
+                              className="terminal-tab-button"
+                              onClick={() => handleTerminalTabClick(state.workspace.path, key)}
+                            >
+                              {record.label}
+                            </button>
+                            <button
+                              type="button"
+                              className="terminal-tab-close"
+                              aria-label={`Close ${record.label}`}
+                              onClick={() => handleTerminalClose(state.workspace.path, key)}
+                            >
+                              ×
+                            </button>
                           </div>
-                          {terminalEntry && (
-                            <div className="quick-command-status">
-                              {terminalEntry.quickCommandExecuted ? "Executed" : "Pending"}
-                              {terminalEntry.lastExitCode !== null && (
-                                <span className="quick-command-exit"> · Exit {terminalEntry.lastExitCode}</span>
-                              )}
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                        );
+                      })}
+                      <button
+                        type="button"
+                        className="terminal-tab-add"
+                        onClick={() => handleAddTerminal(state.workspace.path)}
+                        aria-label="New terminal"
+                        title="New terminal"
+                      >
+                        +
+                      </button>
+                    </div>
 
-                {activeTerminalEntry ? (
-                  <div className="terminal-log" role="log">
-                    <pre>{activeTerminalEntry.log || "No output yet."}</pre>
+                    <div className="terminal-panels">
+                      {state.activeTerminalKey
+                        ? state.terminalOrder.map((key) => {
+                            const record = state.terminals.get(key);
+                            if (!record) return null;
+                            const tabActive = state.activeTerminalKey === key;
+                            return (
+                              <TerminalPanel
+                                key={key}
+                                workspacePath={state.workspace.path}
+                                record={record}
+                                isActive={tabActive}
+                                onStart={(workspacePath, targetRecord, container) => {
+                                  const workspaceState = workspaceTabsRef.current.get(workspacePath);
+                                  if (!workspaceState) return;
+                                  void startTerminalSession(workspaceState, targetRecord, container);
+                                }}
+                                onDispose={(workspacePath, targetRecord) => {
+                                  const workspaceState = workspaceTabsRef.current.get(workspacePath);
+                                  if (!workspaceState) return;
+                                  if (!workspaceState.terminals.has(targetRecord.key)) {
+                                    disposeTerminalRuntime(workspacePath, targetRecord, !targetRecord.isEphemeral);
+                                  }
+                                }}
+                              />
+                            );
+                          })
+                        : (
+                          <TerminalPlaceholder />
+                          )}
+                    </div>
                   </div>
-                ) : (
-                  <div className="terminal-log terminal-log-empty">
-                    <p>Select a quick command to view its output.</p>
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
+                );
+              })
+            )}
+          </div>
         </section>
       </main>
 
       <div id="toast-container" className="toast-container">
-        {toasts.map((toast) => (
+        {toastList.map((toast) => (
           <div key={toast.id} className={cx("toast", toast.kind)}>
             {toast.message}
           </div>

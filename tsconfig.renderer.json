@@ -8,13 +8,9 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "jsx": "react",
-    "baseUrl": "./src",
-    "paths": {
-      "react": ["vendor/faux-react"],
-      "react-dom/client": ["vendor/faux-react-dom-client"]
-    }
+    "jsx": "react-jsx",
+    "baseUrl": "./src"
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/vendor/**/*.ts"],
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"],
   "exclude": ["node_modules"]
 }

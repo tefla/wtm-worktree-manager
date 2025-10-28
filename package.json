@@ -5,10 +5,12 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",
-    "build:renderer": "tsc -p tsconfig.renderer.json",
+    "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
+    "build:renderer": "node scripts/build-renderer.mjs",
     "copy-static": "node scripts/copy-static.mjs",
-    "build": "npm run build:main && npm run build:renderer && npm run copy-static",
-    "dev": "npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
+    "build": "npm run build:main && npm run typecheck:renderer && npm run build:renderer && npm run copy-static",
+    "rebuild:native": "node scripts/ensure-node-pty.cjs --force",
+    "dev": "node scripts/ensure-node-pty.cjs && npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
     "start": "npm run dev",
     "test:unit": "npm run build:main && node --test tests/unit",
     "test:e2e": "playwright test",
@@ -17,12 +19,17 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
-    "devDependencies": {
-      "@playwright/test": "^1.47.2",
-      "@types/node": "^22.5.2",
-      "electron": "^30.0.0",
-      "typescript": "^5.5.4"
-    }
+  "devDependencies": {
+    "@playwright/test": "^1.47.2",
+    "@types/node": "^22.5.2",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "electron": "^30.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.4"
   }
+}
