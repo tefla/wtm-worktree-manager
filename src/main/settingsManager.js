@@ -20,6 +20,42 @@ function cloneQuickCommands(commands = DEFAULT_QUICK_COMMANDS) {
   return commands.map((command) => ({ ...command }));
 }
 
+function coerceString(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return String(value).trim();
+}
+
+function normalizeArgs(args) {
+  if (!Array.isArray(args)) {
+    return [];
+  }
+  return args
+    .map((value) => coerceString(value))
+    .filter((value) => value.length > 0);
+}
+
+function normalizeEnv(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return undefined;
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(env)) {
+    const name = coerceString(key);
+    if (!name) continue;
+    const stringValue = coerceString(value);
+    if (!stringValue) continue;
+    normalized[name] = stringValue;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function defaultSettings() {
   const home = homedir();
   const defaultEnvironment = {
@@ -158,13 +194,43 @@ class SettingsManager {
 
       usedKeys.add(key);
 
-      const quickCommand = typeof entry.quickCommand === "string" ? entry.quickCommand.trim() : "";
+      const quickCommand = coerceString(entry.quickCommand);
+      const command = coerceString(entry.command);
+      const description = coerceString(entry.description);
+      const icon = coerceString(entry.icon);
+      const cwd = coerceString(entry.cwd);
+      const args = normalizeArgs(entry.args);
+      const env = normalizeEnv(entry.env);
+      const autoRun = entry.autoRun;
 
-      normalized.push({
-        key,
-        label,
-        quickCommand,
-      });
+      const normalizedEntry = { key, label };
+
+      if (quickCommand) {
+        normalizedEntry.quickCommand = quickCommand;
+      }
+      if (command) {
+        normalizedEntry.command = command;
+      }
+      if (args.length > 0) {
+        normalizedEntry.args = args;
+      }
+      if (env) {
+        normalizedEntry.env = env;
+      }
+      if (cwd) {
+        normalizedEntry.cwd = cwd;
+      }
+      if (description) {
+        normalizedEntry.description = description;
+      }
+      if (icon) {
+        normalizedEntry.icon = icon;
+      }
+      if (typeof autoRun === "boolean") {
+        normalizedEntry.autoRun = autoRun;
+      }
+
+      normalized.push(normalizedEntry);
     });
 
     if (normalized.length === 0) {

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
     "start": "ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
-    "test:unit": "node --test tests/unit/**/*.test.js",
+    "test:unit": "node --test tests/unit",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },

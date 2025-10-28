@@ -29,6 +29,65 @@ function defaultShellArgs(commandPath) {
   return ["-i"];
 }
 
+function normalizeArgs(args) {
+  if (!Array.isArray(args)) {
+    return undefined;
+  }
+
+  const normalized = args
+    .map((value) => {
+      if (typeof value === "string") {
+        return value.trim();
+      }
+      if (value === undefined || value === null) {
+        return "";
+      }
+      return String(value).trim();
+    })
+    .filter((value) => value.length > 0);
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeEnv(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(env)) {
+    const name = typeof key === "string" ? key.trim() : String(key).trim();
+    if (!name) continue;
+    const stringValue =
+      typeof value === "string"
+        ? value
+        : value === undefined || value === null
+        ? ""
+        : String(value);
+    if (!stringValue) continue;
+    normalized[name] = stringValue;
+  }
+
+  return normalized;
+}
+
+function resolveWorkingDirectory(workspacePath, cwd) {
+  if (typeof cwd !== "string") {
+    return path.resolve(workspacePath);
+  }
+
+  const trimmed = cwd.trim();
+  if (!trimmed) {
+    return path.resolve(workspacePath);
+  }
+
+  if (path.isAbsolute(trimmed)) {
+    return path.resolve(trimmed);
+  }
+
+  return path.resolve(path.join(workspacePath, trimmed));
+}
+
 class TerminalManager {
   constructor() {
     this.sessions = new Map(); // sessionId -> session
@@ -44,6 +103,7 @@ class TerminalManager {
       cols = 80,
       rows = 24,
       env = {},
+      cwd,
     } = params;
 
     if (!workspacePath || !slot) {
@@ -51,8 +111,11 @@ class TerminalManager {
     }
 
     const absPath = path.resolve(workspacePath);
-    const shellCommand = command ?? process.env.SHELL ?? "zsh";
-    const shellArgs = Array.isArray(args) ? args : null;
+    const requestedCommand = typeof command === "string" ? command.trim() : "";
+    const shellCommand = requestedCommand || process.env.SHELL || "zsh";
+    const shellArgs = normalizeArgs(args);
+    const normalizedEnv = normalizeEnv(env);
+    const workingDirectory = resolveWorkingDirectory(absPath, cwd);
 
     const slotIndex = this.workspaceIndex.get(absPath);
     if (slotIndex?.has(slot)) {
@@ -66,6 +129,8 @@ class TerminalManager {
           slot,
           command: existingSession.command,
           args: existingSession.args,
+          env: existingSession.env,
+          cwd: existingSession.cwd,
           existing: true,
         };
       }
@@ -76,17 +141,18 @@ class TerminalManager {
         workspacePath: absPath,
         slot,
         command: shellCommand,
-        args: shellArgs ?? undefined,
+        args: shellArgs,
         cols,
         rows,
-        env,
+        env: normalizedEnv,
+        cwd: workingDirectory,
       },
       webContentsId,
     );
   }
 
   createSession(params, webContentsId) {
-    const { workspacePath, slot, command, args, cols, rows, env } = params;
+    const { workspacePath, slot, command, args, cols, rows, env, cwd } = params;
     if (!pty) {
       throw new Error(
         "Terminal support is unavailable. Rebuild native modules with `npm rebuild node-pty --runtime=electron --target=30.0.0`.",
@@ -95,13 +161,14 @@ class TerminalManager {
     const effectiveCommand = command ?? process.env.SHELL ?? "zsh";
     const resolvedCommand = resolveCommand(effectiveCommand);
     const resolvedArgs = Array.isArray(args) && args.length > 0 ? args : defaultShellArgs(resolvedCommand);
+    const workingDirectory = cwd ? path.resolve(cwd) : workspacePath;
     const sessionId = randomUUID();
 
     const ptyProcess = pty.spawn(resolvedCommand, resolvedArgs, {
       name: "xterm-color",
       cols,
       rows,
-      cwd: workspacePath,
+      cwd: workingDirectory,
       env: {
         ...process.env,
         ...env,
@@ -117,6 +184,8 @@ class TerminalManager {
       pty: ptyProcess,
       webContentsId,
       closed: false,
+      env,
+      cwd: workingDirectory,
     };
 
     this.sessions.set(sessionId, session);
@@ -138,7 +207,9 @@ class TerminalManager {
       workspacePath,
       slot,
       command: resolvedCommand,
-      args,
+      args: resolvedArgs,
+      env,
+      cwd: workingDirectory,
       existing: false,
     };
   }
@@ -220,6 +291,8 @@ class TerminalManager {
         slot: session.slot,
         command: session.command,
         args: session.args,
+        env: session.env,
+        cwd: session.cwd,
         closed: session.closed,
       }));
   }

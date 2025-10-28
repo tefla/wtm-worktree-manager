@@ -88,9 +88,14 @@ alongside the rest of your dotfiles. By default the app creates
       "quickCommand": "npm i"
     },
     {
-      "key": "lerna-bootstrap",
-      "label": "npm run lerna:bootstrap",
-      "quickCommand": "npm run lerna:bootstrap"
+      "key": "lint-app",
+      "label": "Lint app",
+      "command": "npm",
+      "args": ["run", "lint"],
+      "cwd": "packages/app",
+      "env": {
+        "NODE_ENV": "development"
+      }
     }
   ]
 }
@@ -104,10 +109,20 @@ All paths are resolved to absolute locations automatically.
 
 Populate the optional `quickCommands` array to configure the quick access tabs
 displayed for each workspace. Provide a stable `key`, a `label` for the tab
-title, and an optional `quickCommand` string to run automatically once the
-terminal session starts. Tabs created from this list stay available even after
-closing the running process, while ad-hoc shells can be spawned or removed on
-the fly inside the workspace view.
+title, and choose how the terminal should start:
+
+- `command` and `args` override the executable that spawns for the tab (by
+  default the system shell is used).
+- `cwd` lets you start the terminal from a subdirectory of the workspace (or an
+  absolute path).
+- `env` adds additional environment variables for the spawned process.
+- `quickCommand` sends a one-off line of input once the terminal is ready.
+- Set `autoRun` to `false` to prevent the `quickCommand` from being sent
+  automatically.
+
+Tabs created from this list stay available even after closing the running
+process, while ad-hoc shells can be spawned or removed on the fly inside the
+workspace view.
 
 To use an alternative settings location (useful for scripting or tests), set
 the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.

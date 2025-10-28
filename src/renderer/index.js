@@ -17,6 +17,42 @@ const FALLBACK_QUICK_COMMANDS = [
   },
 ];
 
+function coerceString(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return String(value).trim();
+}
+
+function normalizeArgs(args) {
+  if (!Array.isArray(args)) {
+    return [];
+  }
+  return args
+    .map((value) => coerceString(value))
+    .filter((value) => value.length > 0);
+}
+
+function normalizeEnv(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return undefined;
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(env)) {
+    const name = coerceString(key);
+    if (!name) continue;
+    const stringValue = coerceString(value);
+    if (!stringValue) continue;
+    normalized[name] = stringValue;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function escapeHtml(value) {
   if (!value) return "";
   return value
@@ -149,7 +185,7 @@ class WorkspaceApp {
   }
 
   normalizeQuickCommands(rawCommands) {
-    const fallback = FALLBACK_QUICK_COMMANDS.map((command) => ({ ...command }));
+    const fallback = FALLBACK_QUICK_COMMANDS;
     const source = Array.isArray(rawCommands) ? rawCommands : fallback;
 
     const normalized = [];
@@ -187,17 +223,50 @@ class WorkspaceApp {
       }
       usedKeys.add(key);
 
-      const quickCommand = typeof entry.quickCommand === "string" ? entry.quickCommand.trim() : "";
+      const quickCommand = coerceString(entry.quickCommand);
+      const command = coerceString(entry.command);
+      const description = coerceString(entry.description);
+      const icon = coerceString(entry.icon);
+      const cwd = coerceString(entry.cwd);
+      const args = normalizeArgs(entry.args);
+      const env = normalizeEnv(entry.env);
+      const autoRun = entry.autoRun;
 
-      normalized.push({
-        key,
-        label,
-        quickCommand,
-      });
+      const normalizedEntry = { key, label };
+
+      if (quickCommand) {
+        normalizedEntry.quickCommand = quickCommand;
+      }
+      if (command) {
+        normalizedEntry.command = command;
+      }
+      if (args.length > 0) {
+        normalizedEntry.args = args;
+      }
+      if (env) {
+        normalizedEntry.env = env;
+      }
+      if (cwd) {
+        normalizedEntry.cwd = cwd;
+      }
+      if (description) {
+        normalizedEntry.description = description;
+      }
+      if (icon) {
+        normalizedEntry.icon = icon;
+      }
+      if (typeof autoRun === "boolean") {
+        normalizedEntry.autoRun = autoRun;
+      }
+
+      normalized.push(normalizedEntry);
     });
 
     if (normalized.length === 0) {
-      return fallback;
+      if (source !== fallback) {
+        return this.normalizeQuickCommands(fallback);
+      }
+      return fallback.map((entry) => ({ ...entry }));
     }
 
     return normalized;
@@ -843,7 +912,8 @@ class WorkspaceApp {
       if (!created) {
         return;
       }
-      if (record.def.quickCommand && !record.quickCommandExecuted) {
+      const shouldAutoRun = record.def.autoRun !== false;
+      if (record.def.quickCommand && shouldAutoRun && !record.quickCommandExecuted) {
         setTimeout(() => {
           this.terminalAPI.write(record.sessionId, `${record.def.quickCommand}\n`);
           record.quickCommandExecuted = true;
@@ -889,6 +959,7 @@ class WorkspaceApp {
 
     record.tabButton.classList.remove("is-exited");
     record.closed = false;
+    record.quickCommandExecuted = false;
 
     const panel = document.createElement("div");
     panel.className = "terminal-panel";
@@ -920,13 +991,28 @@ class WorkspaceApp {
     fitAddon.fit();
 
     let sessionInfo;
+    const sessionRequest = {
+      workspacePath: workspaceState.workspace.path,
+      slot: record.key,
+      cols: terminal.cols,
+      rows: terminal.rows,
+    };
+
+    if (record.def.command) {
+      sessionRequest.command = record.def.command;
+    }
+    if (Array.isArray(record.def.args) && record.def.args.length > 0) {
+      sessionRequest.args = record.def.args;
+    }
+    if (record.def.env && typeof record.def.env === "object") {
+      sessionRequest.env = record.def.env;
+    }
+    if (record.def.cwd) {
+      sessionRequest.cwd = record.def.cwd;
+    }
+
     try {
-      sessionInfo = await this.terminalAPI.ensureSession({
-        workspacePath: workspaceState.workspace.path,
-        slot: record.key,
-        cols: terminal.cols,
-        rows: terminal.rows,
-      });
+      sessionInfo = await this.terminalAPI.ensureSession(sessionRequest);
     } catch (error) {
       console.error("Failed to create terminal session", error);
       this.toast.error(`Failed to start terminal: ${record.def.label}`);
@@ -937,6 +1023,8 @@ class WorkspaceApp {
       }
       return null;
     }
+
+    record.quickCommandExecuted = Boolean(sessionInfo?.existing);
 
     this.terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows);
 
