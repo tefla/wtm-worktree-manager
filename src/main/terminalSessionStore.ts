@@ -1,12 +1,12 @@
-const { promises: fs } = require("node:fs");
-const { mkdir } = require("node:fs/promises");
-const { homedir } = require("node:os");
-const { dirname, join, resolve } = require("node:path");
+import { promises as fs } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const HISTORY_LIMIT = 40000;
 const SAVE_DEBOUNCE_MS = 250;
 
-function getStorePath(customPath) {
+function getStorePath(customPath?: string): string {
   if (customPath) {
     return resolve(customPath);
   }
@@ -14,29 +14,57 @@ function getStorePath(customPath) {
   return resolve(join(home, ".wtm", "terminals.json"));
 }
 
-function clone(value) {
+export interface TerminalState {
+  quickCommandExecuted: boolean;
+  history: string;
+  lastExitCode: number | null;
+  lastSignal: string | null;
+  updatedAt: number;
+  label: string | null;
+}
+
+export interface WorkspaceTerminalState {
+  activeTerminal: string | null;
+  terminals: Record<string, TerminalState>;
+  updatedAt: number;
+}
+
+export interface TerminalStoreData {
+  workspaces: Record<string, WorkspaceTerminalState>;
+}
+
+export interface TerminalSessionStoreOptions {
+  filePath?: string;
+}
+
+function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-class TerminalSessionStore {
-  constructor(options = {}) {
+class TerminalSessionStoreClass {
+  filePath: string;
+  data: TerminalStoreData | null;
+  saveTimer: NodeJS.Timeout | null;
+  dirty: boolean;
+
+  constructor(options: TerminalSessionStoreOptions = {}) {
     this.filePath = getStorePath(options.filePath ?? process.env.WTM_TERMINAL_STORE);
     this.data = null;
     this.saveTimer = null;
     this.dirty = false;
   }
 
-  async load() {
+  async load(): Promise<TerminalStoreData> {
     if (this.data) {
       return this.data;
     }
 
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as TerminalStoreData;
       this.data = this.normalise(parsed);
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         this.data = { workspaces: {} };
         await this.flush();
       } else {
@@ -51,42 +79,51 @@ class TerminalSessionStore {
     return this.data;
   }
 
-  normalise(raw) {
-    const source = raw && typeof raw === "object" ? raw : {};
+  normalise(raw: TerminalStoreData | unknown): TerminalStoreData {
+    const source = raw && typeof raw === "object" ? (raw as TerminalStoreData) : { workspaces: {} };
     const workspaces = source.workspaces && typeof source.workspaces === "object" ? source.workspaces : {};
-    const normalised = {};
+    const normalised: Record<string, WorkspaceTerminalState> = {};
     for (const [pathKey, value] of Object.entries(workspaces)) {
       if (!value || typeof value !== "object") continue;
       const resolvedPath = resolve(pathKey);
-      const terminals = value.terminals && typeof value.terminals === "object" ? value.terminals : {};
-      const normalisedTerminals = {};
-      for (const [slot, terminalState] of Object.entries(terminals)) {
+      const terminals = (value as WorkspaceTerminalState).terminals;
+      const normalisedTerminals: Record<string, TerminalState> = {};
+      for (const [slot, terminalState] of Object.entries(terminals || {})) {
         if (!terminalState || typeof terminalState !== "object") continue;
-        const exitCodeRaw = terminalState.lastExitCode;
-        const signalRaw = terminalState.lastSignal;
-        const updatedAtRaw = terminalState.updatedAt;
-        const historyRaw = terminalState.history;
+        const exitCodeRaw = (terminalState as TerminalState).lastExitCode;
+        const signalRaw = (terminalState as TerminalState).lastSignal;
+        const updatedAtRaw = (terminalState as TerminalState).updatedAt;
+        const historyRaw = (terminalState as TerminalState).history;
         normalisedTerminals[slot] = {
-          quickCommandExecuted: Boolean(terminalState.quickCommandExecuted),
+          quickCommandExecuted: Boolean((terminalState as TerminalState).quickCommandExecuted),
           history: typeof historyRaw === "string" ? historyRaw.slice(-HISTORY_LIMIT) : "",
-          lastExitCode: typeof exitCodeRaw === "number" ? exitCodeRaw : exitCodeRaw ?? null,
+          lastExitCode:
+            typeof exitCodeRaw === "number" && Number.isFinite(exitCodeRaw)
+              ? exitCodeRaw
+              : exitCodeRaw ?? null,
           lastSignal: typeof signalRaw === "string" ? signalRaw : signalRaw ?? null,
           updatedAt:
             typeof updatedAtRaw === "number" && Number.isFinite(updatedAtRaw) ? updatedAtRaw : Date.now(),
-          label: typeof terminalState.label === "string" ? terminalState.label : null,
+          label: typeof (terminalState as TerminalState).label === "string" ? (terminalState as TerminalState).label : null,
         };
       }
       normalised[resolvedPath] = {
-        activeTerminal: typeof value.activeTerminal === "string" ? value.activeTerminal : null,
+        activeTerminal:
+          typeof (value as WorkspaceTerminalState).activeTerminal === "string"
+            ? (value as WorkspaceTerminalState).activeTerminal
+            : null,
         terminals: normalisedTerminals,
         updatedAt:
-          typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+          typeof (value as WorkspaceTerminalState).updatedAt === "number" &&
+          Number.isFinite((value as WorkspaceTerminalState).updatedAt)
+            ? (value as WorkspaceTerminalState).updatedAt
+            : Date.now(),
       };
     }
     return { workspaces: normalised };
   }
 
-  scheduleSave() {
+  scheduleSave(): void {
     if (this.saveTimer) return;
     this.dirty = true;
     this.saveTimer = setTimeout(() => {
@@ -97,7 +134,7 @@ class TerminalSessionStore {
     }, SAVE_DEBOUNCE_MS);
   }
 
-  async flush() {
+  async flush(): Promise<void> {
     if (!this.dirty) return;
     await this.load();
     await mkdir(dirname(this.filePath), { recursive: true });
@@ -106,11 +143,11 @@ class TerminalSessionStore {
     this.dirty = false;
   }
 
-  normaliseWorkspaceKey(workspacePath) {
+  normaliseWorkspaceKey(workspacePath: string): string {
     return resolve(workspacePath);
   }
 
-  async ensureWorkspace(workspacePath) {
+  async ensureWorkspace(workspacePath: string): Promise<WorkspaceTerminalState> {
     const data = await this.load();
     const key = this.normaliseWorkspaceKey(workspacePath);
     if (!data.workspaces[key]) {
@@ -124,7 +161,7 @@ class TerminalSessionStore {
     return data.workspaces[key];
   }
 
-  async ensureTerminal(workspacePath, slot, metadata = {}) {
+  async ensureTerminal(workspacePath: string, slot: string, metadata: { label?: string } = {}): Promise<TerminalState> {
     const workspace = await this.ensureWorkspace(workspacePath);
     if (!workspace.terminals[slot]) {
       workspace.terminals[slot] = {
@@ -152,14 +189,14 @@ class TerminalSessionStore {
     return terminal;
   }
 
-  async setActiveTerminal(workspacePath, slot) {
+  async setActiveTerminal(workspacePath: string, slot: string | null): Promise<void> {
     const workspace = await this.ensureWorkspace(workspacePath);
     workspace.activeTerminal = slot ?? null;
     workspace.updatedAt = Date.now();
     this.scheduleSave();
   }
 
-  async markQuickCommand(workspacePath, slot) {
+  async markQuickCommand(workspacePath: string, slot: string): Promise<void> {
     const terminal = await this.ensureTerminal(workspacePath, slot);
     if (!terminal.quickCommandExecuted) {
       terminal.quickCommandExecuted = true;
@@ -168,7 +205,7 @@ class TerminalSessionStore {
     }
   }
 
-  async appendHistory(workspacePath, slot, chunk) {
+  async appendHistory(workspacePath: string, slot: string, chunk: string): Promise<void> {
     if (!chunk) return;
     const terminal = await this.ensureTerminal(workspacePath, slot);
     terminal.history = (terminal.history || "").concat(chunk).slice(-HISTORY_LIMIT);
@@ -176,7 +213,7 @@ class TerminalSessionStore {
     this.scheduleSave();
   }
 
-  async markExit(workspacePath, slot, exitCode, signal) {
+  async markExit(workspacePath: string, slot: string, exitCode: number | null, signal?: string | null): Promise<void> {
     const terminal = await this.ensureTerminal(workspacePath, slot);
     terminal.lastExitCode = exitCode;
     terminal.lastSignal = signal ?? null;
@@ -184,7 +221,7 @@ class TerminalSessionStore {
     this.scheduleSave();
   }
 
-  async clearTerminal(workspacePath, slot) {
+  async clearTerminal(workspacePath: string, slot: string): Promise<void> {
     const data = await this.load();
     const key = this.normaliseWorkspaceKey(workspacePath);
     const workspace = data.workspaces[key];
@@ -202,7 +239,7 @@ class TerminalSessionStore {
     }
   }
 
-  async clearWorkspace(workspacePath) {
+  async clearWorkspace(workspacePath: string): Promise<void> {
     const data = await this.load();
     const key = this.normaliseWorkspaceKey(workspacePath);
     if (data.workspaces[key]) {
@@ -211,33 +248,33 @@ class TerminalSessionStore {
     }
   }
 
-  async getWorkspaceState(workspacePath) {
+  async listWorkspaces(): Promise<string[]> {
     const data = await this.load();
-    const key = this.normaliseWorkspaceKey(workspacePath);
-    const workspace = data.workspaces[key];
-    if (!workspace) {
-      return {
-        activeTerminal: null,
-        terminals: {},
-      };
-    }
+    return Object.keys(data.workspaces);
+  }
+
+  async listSessionsForWorkspace(workspacePath: string): Promise<Record<string, TerminalState>> {
+    const workspace = await this.ensureWorkspace(workspacePath);
+    return clone(workspace.terminals);
+  }
+
+  async getWorkspaceState(workspacePath: string): Promise<WorkspaceTerminalState> {
+    const workspace = await this.ensureWorkspace(workspacePath);
     return clone(workspace);
   }
 
-  async listWorkspaces() {
-    const data = await this.load();
-    return Object.entries(data.workspaces).map(([pathKey, workspace]) => ({
-      workspacePath: pathKey,
-      activeTerminal: workspace.activeTerminal ?? null,
-      terminals: clone(workspace.terminals),
-      updatedAt: workspace.updatedAt,
-    }));
+  async markQuickCommandExecuted(workspacePath: string, slot: string): Promise<void> {
+    await this.markQuickCommand(workspacePath, slot);
+  }
+
+  async setActiveTerminalSlot(workspacePath: string, slot: string | null): Promise<void> {
+    await this.setActiveTerminal(workspacePath, slot);
+  }
+
+  async clearWorkspaceState(workspacePath: string): Promise<void> {
+    await this.clearWorkspace(workspacePath);
   }
 }
 
-const terminalSessionStore = new TerminalSessionStore();
-
-module.exports = {
-  terminalSessionStore,
-  TerminalSessionStore,
-};
+export const terminalSessionStore = new TerminalSessionStoreClass();
+export type TerminalSessionStore = TerminalSessionStoreClass;

@@ -1,8 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
-const path = require("node:path");
-const { workspaceManager } = require("./workspaceManager");
-const { terminalManager } = require("./terminalManager");
-const { settingsManager } = require("./settingsManager");
+import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import path from "node:path";
+import { workspaceManager } from "./workspaceManager";
+import { terminalManager } from "./terminalManager";
+import { settingsManager } from "./settingsManager";
 
 const isMac = process.platform === "darwin";
 
@@ -69,14 +69,14 @@ function exposeTerminalHandlers() {
 
   ipcMain.on("terminal:write", (_event, params) => {
     if (!params?.sessionId || typeof params.data !== "string") return;
-    terminalManager.write(params.sessionId, params.data);
+    void terminalManager.write(params.sessionId, params.data);
   });
 
   ipcMain.handle("terminal:resize", (_event, params) => {
     if (!params?.sessionId || typeof params.cols !== "number" || typeof params.rows !== "number") {
       return;
     }
-    terminalManager.resize(params.sessionId, params.cols, params.rows);
+    return terminalManager.resize(params.sessionId, params.cols, params.rows);
   });
 
   ipcMain.handle("terminal:dispose", (_event, params) => {

@@ -1,13 +1,52 @@
-const { mkdir, stat } = require("node:fs/promises");
-const { constants, promises: fsPromises } = require("node:fs");
-const { homedir } = require("node:os");
-const { dirname, join, relative, resolve } = require("node:path");
-const { spawn } = require("node:child_process");
+import { mkdir, stat } from "node:fs/promises";
+import { constants, promises as fsPromises } from "node:fs";
+import type { Dirent } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { spawn } from "node:child_process";
 
 const { access } = fsPromises;
 
-class GitCommandError extends Error {
-  constructor(command, stderr, message) {
+export interface GitCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export interface WorkspaceStatusSummary {
+  clean: boolean;
+  ahead: number;
+  behind: number;
+  upstream?: string;
+  changeCount: number;
+  summary: string;
+  sampleChanges: string[];
+}
+
+export interface WorkspaceCommitSummary {
+  shortSha: string;
+  author: string;
+  relativeTime: string;
+  subject: string;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  branch?: string;
+  path: string;
+  relativePath: string;
+  headSha: string;
+  status: WorkspaceStatusSummary;
+  lastCommit?: WorkspaceCommitSummary;
+  updatedAt?: number;
+  kind: "worktree" | "folder";
+}
+
+export class GitCommandError extends Error {
+  command: string[];
+  stderr: string;
+
+  constructor(command: string[], stderr: string, message?: string) {
     super(message ?? `Command failed: ${command.join(" ")}`);
     this.name = "GitCommandError";
     this.command = command;
@@ -15,10 +54,10 @@ class GitCommandError extends Error {
   }
 }
 
-async function runCommand(cmd, options = {}) {
+export async function runCommand(cmd: string[], options: { cwd?: string; allowFailure?: boolean } = {}): Promise<GitCommandResult> {
   const { cwd, allowFailure = false } = options;
 
-  return await new Promise((resolve, reject) => {
+  return await new Promise<GitCommandResult>((resolve, reject) => {
     const child = spawn(cmd[0], cmd.slice(1), {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -29,21 +68,21 @@ async function runCommand(cmd, options = {}) {
 
     if (child.stdout) {
       child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
+      child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
       });
     }
 
     if (child.stderr) {
       child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk) => {
+      child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
       });
     }
 
     child.on("error", (error) => {
       if (allowFailure) {
-        resolve({ stdout, stderr: stderr || error.message, exitCode: 1 });
+        resolve({ stdout, stderr: stderr || (error as Error).message, exitCode: 1 });
       } else {
         reject(error);
       }
@@ -54,27 +93,33 @@ async function runCommand(cmd, options = {}) {
         reject(new GitCommandError(cmd, stderr.trim()));
         return;
       }
-      resolve({ stdout, stderr, exitCode });
+      resolve({ stdout, stderr, exitCode: exitCode ?? 0 });
     });
   });
 }
 
-async function pathExists(target) {
+async function pathExists(target: string): Promise<boolean> {
   try {
     await access(target, constants.F_OK);
     return true;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
     }
     throw error;
   }
 }
 
-function parseWorktreeList(output, workspaceRoot) {
+export interface WorktreeEntry {
+  path: string;
+  headSha?: string;
+  branch?: string;
+}
+
+export function parseWorktreeList(output: string, workspaceRoot: string): WorktreeEntry[] {
   const lines = output.split(/\r?\n/);
-  const entries = [];
-  let current = null;
+  const entries: WorktreeEntry[] = [];
+  let current: WorktreeEntry | null = null;
   const normalizedRoot = resolve(workspaceRoot);
 
   for (const rawLine of lines) {
@@ -106,11 +151,20 @@ function parseWorktreeList(output, workspaceRoot) {
   return entries.filter((entry) => resolve(entry.path).startsWith(normalizedRoot));
 }
 
-function parseStatus(output, fallbackBranch) {
+export interface StatusReport {
+  branchName: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  changes: string[];
+  clean: boolean;
+}
+
+export function parseStatus(output: string, fallbackBranch?: string): StatusReport {
   const lines = output.split(/\r?\n/).filter(Boolean);
   let branchLine = lines.shift() ?? "";
   let branchName = fallbackBranch ?? "";
-  let upstream;
+  let upstream: string | undefined;
   let ahead = 0;
   let behind = 0;
 
@@ -147,7 +201,7 @@ function parseStatus(output, fallbackBranch) {
   };
 }
 
-function buildStatusSummary(report) {
+export function buildStatusSummary(report: StatusReport): WorkspaceStatusSummary {
   const changeCount = report.changes.length;
   let summary = "Clean";
   if (!report.clean) {
@@ -165,7 +219,7 @@ function buildStatusSummary(report) {
   };
 }
 
-async function getLastCommit(worktreePath, git) {
+async function getLastCommit(worktreePath: string, git: WorkspaceManager["git"]): Promise<WorkspaceCommitSummary | undefined> {
   const result = await git(["log", "-1", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s"], {
     allowFailure: true,
     cwd: worktreePath,
@@ -178,12 +232,22 @@ async function getLastCommit(worktreePath, git) {
   return { shortSha, author, relativeTime, subject };
 }
 
-class WorkspaceManager {
-  constructor(options = {}) {
+export interface WorkspaceManagerOptions {
+  repoDir?: string;
+  workspaceRoot?: string;
+}
+
+export class WorkspaceManager {
+  repoDir: string;
+  workspaceRoot: string;
+
+  constructor(options: WorkspaceManagerOptions = {}) {
+    this.repoDir = "";
+    this.workspaceRoot = "";
     this.configure(options);
   }
 
-  configure(options = {}) {
+  configure(options: WorkspaceManagerOptions = {}): void {
     const home = homedir();
     const defaults = {
       repoDir: join(home, "wtm", "repo"),
@@ -194,11 +258,11 @@ class WorkspaceManager {
     this.workspaceRoot = resolve(options.workspaceRoot ?? defaults.workspaceRoot);
   }
 
-  async ensureWorkspaceRoot() {
+  async ensureWorkspaceRoot(): Promise<void> {
     await mkdir(this.workspaceRoot, { recursive: true });
   }
 
-  async git(args, options = {}) {
+  async git(args: string[], options: { cwd?: string; allowFailure?: boolean } = {}): Promise<GitCommandResult> {
     const merged = {
       ...options,
       cwd: options.cwd ?? this.repoDir,
@@ -206,13 +270,13 @@ class WorkspaceManager {
     return runCommand(["git", ...args], merged);
   }
 
-  async getWorktreeEntries() {
+  async getWorktreeEntries(): Promise<WorktreeEntry[]> {
     await this.ensureWorkspaceRoot();
     const result = await this.git(["worktree", "list", "--porcelain"]);
     return parseWorktreeList(result.stdout, this.workspaceRoot);
   }
 
-  async buildWorkspace(entry) {
+  async buildWorkspace(entry: WorktreeEntry): Promise<WorkspaceSummary> {
     const statusResult = await this.git(["status", "--porcelain", "--branch"], {
       allowFailure: true,
       cwd: entry.path,
@@ -239,10 +303,10 @@ class WorkspaceManager {
     };
   }
 
-  async listWorkspaces() {
+  async listWorkspaces(): Promise<WorkspaceSummary[]> {
     const entries = await this.getWorktreeEntries();
-    const worktreeMap = new Map();
-    const workspaces = [];
+    const worktreeMap = new Map<string, true>();
+    const workspaces: WorkspaceSummary[] = [];
 
     for (const entry of entries) {
       const workspace = await this.buildWorkspace(entry);
@@ -252,7 +316,7 @@ class WorkspaceManager {
 
     const folderEntries = await fsPromises
       .readdir(this.workspaceRoot, { withFileTypes: true })
-      .catch(() => []);
+      .catch(() => [] as Dirent[]);
 
     for (const dirent of folderEntries) {
       if (!dirent.isDirectory()) {
@@ -292,7 +356,7 @@ class WorkspaceManager {
     });
   }
 
-  async refreshWorkspace(path) {
+  async refreshWorkspace(path: string): Promise<WorkspaceSummary> {
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => item.path === resolve(path));
     if (!entry) {
@@ -301,12 +365,12 @@ class WorkspaceManager {
     return this.buildWorkspace(entry);
   }
 
-  async branchExists(branch) {
+  async branchExists(branch: string): Promise<boolean> {
     const result = await this.git(["rev-parse", "--verify", branch], { allowFailure: true });
     return result.exitCode === 0;
   }
 
-  async createWorkspace(params) {
+  async createWorkspace(params: { branch: string; baseRef?: string }): Promise<WorkspaceSummary> {
     const branchName = params.branch.trim();
     if (!branchName) {
       throw new Error("Branch name is required.");
@@ -350,7 +414,7 @@ class WorkspaceManager {
     return this.buildWorkspace({ path: worktreePath, branch: branchName });
   }
 
-  async deleteWorkspace(params) {
+  async deleteWorkspace(params: { path: string; force?: boolean }): Promise<{ success: boolean; reason?: string; message?: string; path?: string }> {
     const targetPath = resolve(params.path);
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => item.path === targetPath);
@@ -381,12 +445,4 @@ class WorkspaceManager {
   }
 }
 
-const workspaceManager = new WorkspaceManager();
-
-module.exports = {
-  workspaceManager,
-  WorkspaceManager,
-  parseWorktreeList,
-  parseStatus,
-  buildStatusSummary,
-};
+export const workspaceManager = new WorkspaceManager();

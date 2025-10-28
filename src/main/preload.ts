@@ -1,0 +1,74 @@
+import { contextBridge, ipcRenderer } from "electron";
+
+type ListenerDisposer = () => void;
+
+type WorkspaceAPI = {
+  list: () => Promise<unknown>;
+  create: (params: unknown) => Promise<unknown>;
+  delete: (params: unknown) => Promise<unknown>;
+  refresh: (params: unknown) => Promise<unknown>;
+};
+
+type SettingsAPI = {
+  listEnvironments: () => Promise<unknown>;
+  setActiveEnvironment: (params: unknown) => Promise<unknown>;
+};
+
+type TerminalAPI = {
+  ensureSession: (params: unknown) => Promise<unknown>;
+  write: (sessionId: string, data: string) => void;
+  resize: (sessionId: string, cols: number, rows: number) => Promise<unknown>;
+  dispose: (sessionId: string, options?: unknown) => Promise<unknown>;
+  listForWorkspace: (workspacePath: string) => Promise<unknown>;
+  getWorkspaceState: (workspacePath: string) => Promise<unknown>;
+  listSavedWorkspaces: () => Promise<unknown>;
+  markQuickCommand: (workspacePath: string, slot: string) => Promise<unknown>;
+  setActiveTerminal: (workspacePath: string, slot: string | null) => Promise<unknown>;
+  clearWorkspaceState: (workspacePath: string) => Promise<unknown>;
+  onData: (callback: (payload: unknown) => void) => ListenerDisposer;
+  onExit: (callback: (payload: unknown) => void) => ListenerDisposer;
+};
+
+const invoke = (channel: string, payload?: unknown) => ipcRenderer.invoke(channel, payload);
+const addListener = (channel: string, callback: (payload: unknown) => void): ListenerDisposer => {
+  const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+};
+
+contextBridge.exposeInMainWorld("workspaceAPI", {
+  list: () => invoke("workspace:list"),
+  create: (params) => invoke("workspace:create", params),
+  delete: (params) => invoke("workspace:delete", params),
+  refresh: (params) => invoke("workspace:refresh", params),
+} satisfies WorkspaceAPI);
+
+contextBridge.exposeInMainWorld("settingsAPI", {
+  listEnvironments: () => invoke("settings:listEnvironments"),
+  setActiveEnvironment: (params) => invoke("settings:setActiveEnvironment", params),
+} satisfies SettingsAPI);
+
+contextBridge.exposeInMainWorld("terminalAPI", {
+  ensureSession: (params) => invoke("terminal:ensure", params),
+  write: (sessionId, data) => ipcRenderer.send("terminal:write", { sessionId, data }),
+  resize: (sessionId, cols, rows) => invoke("terminal:resize", { sessionId, cols, rows }),
+  dispose: (sessionId, options) => invoke("terminal:dispose", { sessionId, options }),
+  listForWorkspace: (workspacePath) => invoke("terminal:listForWorkspace", { workspacePath }),
+  getWorkspaceState: (workspacePath) => invoke("terminal:getWorkspaceState", { workspacePath }),
+  listSavedWorkspaces: () => invoke("terminal:listSavedWorkspaces"),
+  markQuickCommand: (workspacePath, slot) => invoke("terminal:markQuickCommand", { workspacePath, slot }),
+  setActiveTerminal: (workspacePath, slot) => invoke("terminal:setActiveTerminal", { workspacePath, slot }),
+  clearWorkspaceState: (workspacePath) => invoke("terminal:clearWorkspaceState", { workspacePath }),
+  onData: (callback) => addListener("terminal:data", callback),
+  onExit: (callback) => addListener("terminal:exit", callback),
+} satisfies TerminalAPI);
+
+declare global {
+  interface Window {
+    workspaceAPI: WorkspaceAPI;
+    settingsAPI: SettingsAPI;
+    terminalAPI: TerminalAPI;
+  }
+}

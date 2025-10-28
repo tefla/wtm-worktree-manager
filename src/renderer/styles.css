@@ -914,3 +914,243 @@ code {
     min-height: 200px;
   }
 }
+
+.workspace-list-empty {
+  margin: 24px 16px;
+  text-align: center;
+  color: #94a3b8;
+  padding: 16px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px dashed rgba(148, 163, 184, 0.25);
+}
+
+.workspace-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.workspace-list-item:hover {
+  background: rgba(30, 41, 59, 0.65);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.workspace-list-item.selected {
+  background: rgba(30, 41, 59, 0.85);
+  border-color: rgba(125, 211, 252, 0.45);
+}
+
+.workspace-item-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-item-meta {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.workspace-detail-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #e2e8f0;
+}
+
+.workspace-path {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+  word-break: break-all;
+}
+
+.workspace-detail-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.workspace-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 8px;
+  border: 1px solid rgba(71, 85, 105, 0.35);
+  padding: 12px 14px;
+}
+
+.workspace-summary h3 {
+  margin: 6px 0 2px;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+}
+
+.workspace-summary h3:first-child {
+  margin-top: 0;
+}
+
+.workspace-summary p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+}
+
+.workspace-changes {
+  margin-top: 8px;
+}
+
+.workspace-changes ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #cbd5f5;
+  font-size: 0.8rem;
+}
+
+.workspace-changes li {
+  margin-bottom: 2px;
+}
+
+.workspace-terminals {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workspace-terminals header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workspace-terminals h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #cbd5f5;
+}
+
+.workspace-terminals-empty {
+  margin: 0;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px dashed rgba(148, 163, 184, 0.25);
+  border-radius: 6px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.quick-command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quick-command-list li {
+  border: 1px solid rgba(71, 85, 105, 0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.85);
+  transition: border-color 0.12s ease;
+}
+
+.quick-command-list li.active {
+  border-color: rgba(125, 211, 252, 0.45);
+}
+
+.quick-command-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.quick-command-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-command-details strong {
+  font-size: 0.9rem;
+  color: #e2e8f0;
+}
+
+.quick-command-meta {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.quick-command-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.quick-command-status {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.quick-command-exit {
+  color: #fca5a5;
+}
+
+.terminal-log {
+  flex: 1;
+  min-height: 160px;
+  background: rgba(5, 11, 24, 0.95);
+  border: 1px solid rgba(71, 85, 105, 0.35);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.terminal-log pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: #e2e8f0;
+}
+
+.terminal-log-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  text-align: center;
+}

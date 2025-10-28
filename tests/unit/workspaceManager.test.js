@@ -9,7 +9,7 @@ const {
   parseStatus,
   buildStatusSummary,
   WorkspaceManager,
-} = require("../../src/main/workspaceManager");
+} = require("../../dist/main/workspaceManager.js");
 
 test("parseWorktreeList extracts entries under workspace root", () => {
   const output = `worktree /tmp/workspaces/feature-branch\nHEAD abc123\nbranch refs/heads/feature/branch\n\nworktree /tmp/workspaces/main\nHEAD def456\nbranch refs/heads/main\n`;
