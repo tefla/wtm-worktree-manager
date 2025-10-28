@@ -636,6 +636,15 @@ code {
   display: flex;
 }
 
+.terminal-placeholder {
+  margin: auto;
+  padding: 16px;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
 .terminal-panel {
   flex: 1;
   min-height: 0;

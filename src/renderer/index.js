@@ -8,14 +8,12 @@ const DEFAULT_TERMINALS = [
   {
     key: "npm-install",
     label: "npm i",
-    command: "npm",
-    args: ["i"],
+    quickCommand: "npm i",
   },
   {
     key: "lerna-bootstrap",
     label: "npm run lerna:bootstrap",
-    command: "npm",
-    args: ["run", "lerna:bootstrap"],
+    quickCommand: "npm run lerna:bootstrap",
   },
 ];
 
@@ -584,13 +582,20 @@ class WorkspaceApp {
     this.tabBar.appendChild(tabButton);
     this.tabPanels.appendChild(panel);
 
+    const placeholder = document.createElement("div");
+    placeholder.className = "terminal-placeholder";
+    placeholder.textContent = "Select a quick action to launch a terminal.";
+    terminalPanels.appendChild(placeholder);
+
     const workspaceState = {
       workspace,
       tabButton,
       panel,
       terminalTabs,
       terminalPanels,
+      placeholder,
       terminals: new Map(),
+      terminalDefs: new Map(),
       activeTerminalKey: null,
     };
 
@@ -598,7 +603,7 @@ class WorkspaceApp {
     this.updateWorkspacePlaceholderVisibility();
 
     this.defaultTerminals.forEach((terminalDef) => {
-      void this.ensureWorkspaceTerminal(workspaceState, terminalDef);
+      this.setupTerminalTab(workspaceState, terminalDef);
     });
 
     this.activateWorkspaceTab(workspace.path);
@@ -610,28 +615,75 @@ class WorkspaceApp {
       const isActive = key === path;
       state.tabButton.classList.toggle("is-active", isActive);
       state.panel.classList.toggle("is-active", isActive);
-      if (isActive) {
-        if (!state.activeTerminalKey && this.defaultTerminals.length > 0) {
-          state.activeTerminalKey = this.defaultTerminals[0].key;
-        }
-        if (state.activeTerminalKey) {
-          this.activateTerminal(state, state.activeTerminalKey);
-        }
+      if (isActive && state.activeTerminalKey) {
+        this.setActiveTerminal(state, state.activeTerminalKey);
+      } else if (!isActive) {
+        this.setActiveTerminal(state, null);
       }
     });
     this.updateActiveRowHighlight();
   }
 
-  activateTerminal(workspaceState, terminalKey) {
+  setupTerminalTab(workspaceState, terminalDef) {
+    const tabButton = document.createElement("button");
+    tabButton.className = "terminal-tab";
+    tabButton.type = "button";
+    tabButton.textContent = terminalDef.label;
+    tabButton.title = terminalDef.label;
+
+    tabButton.addEventListener("click", () => {
+      void this.handleTerminalTabClick(workspaceState, terminalDef.key);
+    });
+
+    workspaceState.terminalTabs.appendChild(tabButton);
+
+    const record = {
+      key: terminalDef.key,
+      def: terminalDef,
+      tabButton,
+      panel: null,
+      view: null,
+      terminal: null,
+      fitAddon: null,
+      resizeObserver: null,
+      sessionId: null,
+      closed: false,
+      quickCommandExecuted: false,
+    };
+
+    workspaceState.terminals.set(terminalDef.key, record);
+    workspaceState.terminalDefs.set(terminalDef.key, terminalDef);
+  }
+
+  async handleTerminalTabClick(workspaceState, terminalKey) {
     const record = workspaceState.terminals.get(terminalKey);
     if (!record) return;
 
+    if (!record.terminal) {
+      const created = await this.createTerminalForRecord(workspaceState, record);
+      if (!created) {
+        return;
+      }
+      if (record.def.quickCommand && !record.quickCommandExecuted) {
+        setTimeout(() => {
+          this.terminalAPI.write(record.sessionId, `${record.def.quickCommand}\n`);
+          record.quickCommandExecuted = true;
+        }, 30);
+      }
+    }
+
+    this.setActiveTerminal(workspaceState, terminalKey);
+  }
+
+  setActiveTerminal(workspaceState, terminalKey) {
     workspaceState.activeTerminalKey = terminalKey;
     workspaceState.terminals.forEach((entry, key) => {
       const isActive = key === terminalKey;
-      entry.tabButton.classList.toggle("is-active", isActive);
-      entry.panel.classList.toggle("is-active", isActive);
-      if (isActive) {
+      entry.tabButton?.classList.toggle("is-active", isActive);
+      if (entry.panel) {
+        entry.panel.classList.toggle("is-active", isActive);
+      }
+      if (isActive && entry.terminal) {
         requestAnimationFrame(() => {
           entry.fitAddon.fit();
           if (!entry.closed) {
@@ -641,32 +693,29 @@ class WorkspaceApp {
         });
       }
     });
-  }
 
-  async ensureWorkspaceTerminal(workspaceState, terminalDef) {
-    if (workspaceState.terminals.has(terminalDef.key)) {
-      const existing = workspaceState.terminals.get(terminalDef.key);
-      if (existing) {
-        existing.tabButton.classList.remove("is-exited");
-      }
-      return workspaceState.terminals.get(terminalDef.key);
+    if (terminalKey && workspaceState.placeholder?.isConnected) {
+      workspaceState.placeholder.remove();
     }
 
-    const tabButton = document.createElement("button");
-    tabButton.className = "terminal-tab";
-    tabButton.type = "button";
-    tabButton.textContent = terminalDef.label;
-    tabButton.title = terminalDef.label;
+    if (!terminalKey && workspaceState.placeholder && !workspaceState.placeholder.isConnected) {
+      workspaceState.terminalPanels.appendChild(workspaceState.placeholder);
+    }
+  }
+
+  async createTerminalForRecord(workspaceState, record) {
+    if (workspaceState.placeholder?.isConnected) {
+      workspaceState.placeholder.remove();
+    }
 
     const panel = document.createElement("div");
     panel.className = "terminal-panel";
-    panel.dataset.key = terminalDef.key;
+    panel.dataset.key = record.key;
 
     const view = document.createElement("div");
     view.className = "terminal-view";
     panel.appendChild(view);
 
-    workspaceState.terminalTabs.appendChild(tabButton);
     workspaceState.terminalPanels.appendChild(panel);
 
     const terminal = new this.TerminalCtor({
@@ -692,18 +741,18 @@ class WorkspaceApp {
     try {
       sessionInfo = await this.terminalAPI.ensureSession({
         workspacePath: workspaceState.workspace.path,
-        slot: terminalDef.key,
-        command: terminalDef.command,
-        args: terminalDef.args,
+        slot: record.key,
         cols: terminal.cols,
         rows: terminal.rows,
       });
     } catch (error) {
       console.error("Failed to create terminal session", error);
-      this.toast.error(`Failed to start terminal: ${terminalDef.label}`);
+      this.toast.error(`Failed to start terminal: ${record.def.label}`);
       terminal.dispose();
-      workspaceState.terminalTabs.removeChild(tabButton);
       workspaceState.terminalPanels.removeChild(panel);
+      if (workspaceState.placeholder && !workspaceState.placeholder.isConnected) {
+        workspaceState.terminalPanels.appendChild(workspaceState.placeholder);
+      }
       return null;
     }
 
@@ -719,31 +768,17 @@ class WorkspaceApp {
     });
     resizeObserver.observe(view);
 
-    const record = {
-      key: terminalDef.key,
-      sessionId: sessionInfo.sessionId,
-      terminal,
-      fitAddon,
-      view,
-      tabButton,
-      panel,
-      resizeObserver,
-      closed: false,
-    };
+    record.sessionId = sessionInfo.sessionId;
+    record.terminal = terminal;
+    record.fitAddon = fitAddon;
+    record.view = view;
+    record.panel = panel;
+    record.resizeObserver = resizeObserver;
+    record.closed = false;
 
-    tabButton.addEventListener("click", () => {
-      this.activateTerminal(workspaceState, terminalDef.key);
-    });
+    record.tabButton.classList.remove("is-exited");
 
-    workspaceState.terminals.set(terminalDef.key, record);
     this.sessionMap.set(sessionInfo.sessionId, record);
-
-    if (
-      !workspaceState.activeTerminalKey ||
-      workspaceState.activeTerminalKey === terminalDef.key
-    ) {
-      this.activateTerminal(workspaceState, terminalDef.key);
-    }
 
     return record;
   }
@@ -755,12 +790,14 @@ class WorkspaceApp {
 
     workspaceState.terminals.forEach((record) => {
       record.resizeObserver?.disconnect();
-      record.terminal.dispose();
-      this.sessionMap.delete(record.sessionId);
-      void this.terminalAPI.dispose(record.sessionId);
+      if (record.terminal) {
+        record.terminal.dispose();
+      }
+      if (record.sessionId) {
+        this.sessionMap.delete(record.sessionId);
+        void this.terminalAPI.dispose(record.sessionId);
+      }
     });
-    workspaceState.terminals.clear();
-
     workspaceState.tabButton.remove();
     workspaceState.panel.remove();
     this.openWorkspaces.delete(path);
@@ -823,7 +860,7 @@ class WorkspaceApp {
     const workspaceState = this.openWorkspaces.get(this.activeWorkspacePath);
     if (!workspaceState || !workspaceState.activeTerminalKey) return;
     const record = workspaceState.terminals.get(workspaceState.activeTerminalKey);
-    if (!record || record.closed) return;
+    if (!record || record.closed || !record.terminal) return;
     record.fitAddon.fit();
     this.terminalAPI.resize(record.sessionId, record.terminal.cols, record.terminal.rows);
   }

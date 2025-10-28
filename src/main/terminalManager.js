@@ -19,6 +19,16 @@ function resolveCommand(command) {
   return command;
 }
 
+function defaultShellArgs(commandPath) {
+  const base = path.basename(commandPath);
+  if (!base) return ["-i"];
+  if (base.includes("fish")) return ["-i"];
+  if (base.includes("powershell") || base.includes("pwsh")) {
+    return ["-NoLogo"];
+  }
+  return ["-i"];
+}
+
 class TerminalManager {
   constructor() {
     this.sessions = new Map(); // sessionId -> session
@@ -30,17 +40,20 @@ class TerminalManager {
       workspacePath,
       slot,
       command,
-      args = [],
+      args,
       cols = 80,
       rows = 24,
       env = {},
     } = params;
 
-    if (!workspacePath || !slot || !command) {
-      throw new Error("workspacePath, slot, and command are required to create a terminal session.");
+    if (!workspacePath || !slot) {
+      throw new Error("workspacePath and slot are required to create a terminal session.");
     }
 
     const absPath = path.resolve(workspacePath);
+    const shellCommand = command ?? process.env.SHELL ?? "zsh";
+    const shellArgs = Array.isArray(args) ? args : null;
+
     const slotIndex = this.workspaceIndex.get(absPath);
     if (slotIndex?.has(slot)) {
       const existingId = slotIndex.get(slot);
@@ -62,8 +75,8 @@ class TerminalManager {
       {
         workspacePath: absPath,
         slot,
-        command,
-        args,
+        command: shellCommand,
+        args: shellArgs ?? undefined,
         cols,
         rows,
         env,
@@ -79,10 +92,12 @@ class TerminalManager {
         "Terminal support is unavailable. Rebuild native modules with `npm rebuild node-pty --runtime=electron --target=30.0.0`.",
       );
     }
-    const resolvedCommand = resolveCommand(command);
+    const effectiveCommand = command ?? process.env.SHELL ?? "zsh";
+    const resolvedCommand = resolveCommand(effectiveCommand);
+    const resolvedArgs = Array.isArray(args) && args.length > 0 ? args : defaultShellArgs(resolvedCommand);
     const sessionId = randomUUID();
 
-    const ptyProcess = pty.spawn(resolvedCommand, args, {
+    const ptyProcess = pty.spawn(resolvedCommand, resolvedArgs, {
       name: "xterm-color",
       cols,
       rows,
@@ -98,7 +113,7 @@ class TerminalManager {
       workspacePath,
       slot,
       command: resolvedCommand,
-      args,
+      args: resolvedArgs,
       pty: ptyProcess,
       webContentsId,
       closed: false,
