@@ -73,13 +73,21 @@ alongside the rest of your dotfiles. By default the app creates
 
 ```json
 {
-  "repoDir": "/absolute/path/to/your/repo",
-  "workspaceRoot": "/absolute/path/to/worktrees"
+  "environments": {
+    "default": {
+      "repoDir": "/absolute/path/to/your/repo",
+      "workspaceRoot": "/absolute/path/to/worktrees"
+    }
+  },
+  "activeEnvironment": "default"
 }
 ```
 
-Edit this file to point at your repository and worktree directory before
-launching the app. Both paths are resolved to absolute paths automatically.
+Add additional environments to the `environments` object when you need to work
+with multiple repositories. The app exposes a dropdown in the header that lets
+you switch between the configured environments at runtime. The
+`activeEnvironment` key selects which environment is used when the app starts.
+All paths are resolved to absolute locations automatically.
 
 To use an alternative settings location (useful for scripting or tests), set
 the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
