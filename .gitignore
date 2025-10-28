@@ -1,0 +1,13 @@
+node_modules/
+build/
+test-results/
+nohup.out
+.idea/
+
+# Logs and temp files
+npm-debug.log*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

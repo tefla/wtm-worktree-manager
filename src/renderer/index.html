@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WTM (WorkTree Manager)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-text">
+          <h1>WTM (WorkTree Manager)</h1>
+          <p>Manage git worktrees for <code>~/dev/refsix/scorza</code></p>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-button" class="accent-button" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="create-section">
+        <form id="create-form" autocomplete="off">
+          <label class="field">
+            <span>Branch or ticket name</span>
+            <input
+              id="branch-input"
+              name="branch"
+              type="text"
+              placeholder="SCORZA-1234-awesome-feature"
+              required
+            />
+          </label>
+          <label class="field optional">
+            <span>Base ref (optional)</span>
+            <input
+              id="base-input"
+              name="base"
+              type="text"
+              placeholder="origin/develop"
+            />
+          </label>
+          <button id="create-button" class="primary-button" type="submit">
+            Create Workspace
+          </button>
+        </form>
+        <p class="hint">
+          Workspaces live in <code>~/dev/refsix/workspaces</code>. New branches fall back to
+          <code>origin/develop</code> when no remote exists.
+        </p>
+      </section>
+
+      <main class="workspace-area">
+        <div id="workspace-list" class="workspace-list" aria-live="polite"></div>
+      </main>
+
+      <div id="toast-container" class="toast-container"></div>
+    </div>
+
+    <script src="./index.js"></script>
+  </body>
+</html>
