@@ -4,7 +4,7 @@ const ToastKind = {
   ERROR: "error",
 };
 
-const DEFAULT_TERMINALS = [
+const FALLBACK_QUICK_COMMANDS = [
   {
     key: "npm-install",
     label: "npm i",
@@ -100,7 +100,7 @@ class WorkspaceApp {
     this.sessionMap = new Map();
     this.rowElements = new Map();
     this.unsubscribe = [];
-    this.defaultTerminals = DEFAULT_TERMINALS;
+    this.defaultTerminals = this.normalizeQuickCommands();
     this.environments = [];
     this.activeEnvironmentName = "";
 
@@ -148,6 +148,61 @@ class WorkspaceApp {
     });
   }
 
+  normalizeQuickCommands(rawCommands) {
+    const fallback = FALLBACK_QUICK_COMMANDS.map((command) => ({ ...command }));
+    const source = Array.isArray(rawCommands) ? rawCommands : fallback;
+
+    const normalized = [];
+    const usedKeys = new Set();
+
+    const slugify = (value, index) => {
+      const base = typeof value === "string" ? value.trim() : "";
+      const fallbackKey = `quick-${index + 1}`;
+      if (!base) return fallbackKey;
+      const slug = base
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+/, "")
+        .replace(/-+$/, "");
+      return slug || fallbackKey;
+    };
+
+    source.forEach((entry, index) => {
+      if (!entry || typeof entry !== "object") {
+        return;
+      }
+
+      const label = typeof entry.label === "string" ? entry.label.trim() : "";
+      if (!label) {
+        return;
+      }
+
+      const rawKey = typeof entry.key === "string" ? entry.key.trim() : "";
+      const baseKey = rawKey || slugify(label, index);
+      let key = baseKey;
+      let suffix = 1;
+      while (usedKeys.has(key)) {
+        suffix += 1;
+        key = `${baseKey}-${suffix}`;
+      }
+      usedKeys.add(key);
+
+      const quickCommand = typeof entry.quickCommand === "string" ? entry.quickCommand.trim() : "";
+
+      normalized.push({
+        key,
+        label,
+        quickCommand,
+      });
+    });
+
+    if (normalized.length === 0) {
+      return fallback;
+    }
+
+    return normalized;
+  }
+
   async initialize() {
     try {
       await this.loadEnvironments();
@@ -165,6 +220,7 @@ class WorkspaceApp {
       const result = await this.settingsAPI.listEnvironments();
       const environments = Array.isArray(result?.environments) ? result.environments : [];
       this.environments = environments;
+      this.defaultTerminals = this.normalizeQuickCommands(result?.quickCommands);
       const active =
         typeof result?.activeEnvironment === "string"
           ? result.activeEnvironment
@@ -246,6 +302,7 @@ class WorkspaceApp {
       const active =
         typeof result?.activeEnvironment === "string" ? result.activeEnvironment : target;
       this.activeEnvironmentName = active;
+      this.defaultTerminals = this.normalizeQuickCommands(result?.quickCommands);
       this.renderEnvironmentOptions({ preserveDisabled: true });
       this.toast.success(`Switched to ${this.activeEnvironmentName}`);
 
@@ -584,7 +641,7 @@ class WorkspaceApp {
 
     const placeholder = document.createElement("div");
     placeholder.className = "terminal-placeholder";
-    placeholder.textContent = "Select a quick action to launch a terminal.";
+    placeholder.textContent = "Select a quick action or create a terminal to get started.";
     terminalPanels.appendChild(placeholder);
 
     const workspaceState = {
@@ -597,13 +654,28 @@ class WorkspaceApp {
       terminals: new Map(),
       terminalDefs: new Map(),
       activeTerminalKey: null,
+      addTerminalButton: null,
+      customTerminalCount: 0,
     };
+
+    const addTerminalButton = document.createElement("button");
+    addTerminalButton.type = "button";
+    addTerminalButton.className = "terminal-add-button";
+    addTerminalButton.textContent = "+ New terminal";
+    addTerminalButton.title = "Open a new terminal";
+    addTerminalButton.addEventListener("click", () => {
+      this.createAdHocTerminal(workspaceState);
+    });
+
+    terminalTabs.appendChild(addTerminalButton);
+
+    workspaceState.addTerminalButton = addTerminalButton;
 
     this.openWorkspaces.set(workspace.path, workspaceState);
     this.updateWorkspacePlaceholderVisibility();
 
     this.defaultTerminals.forEach((terminalDef) => {
-      this.setupTerminalTab(workspaceState, terminalDef);
+      this.setupTerminalTab(workspaceState, terminalDef, { isPreset: true });
     });
 
     this.activateWorkspaceTab(workspace.path);
@@ -624,23 +696,47 @@ class WorkspaceApp {
     this.updateActiveRowHighlight();
   }
 
-  setupTerminalTab(workspaceState, terminalDef) {
+  setupTerminalTab(workspaceState, terminalDef, options = {}) {
+    const { isPreset = false } = options;
+
     const tabButton = document.createElement("button");
     tabButton.className = "terminal-tab";
     tabButton.type = "button";
-    tabButton.textContent = terminalDef.label;
     tabButton.title = terminalDef.label;
+    tabButton.dataset.key = terminalDef.key;
 
-    tabButton.addEventListener("click", () => {
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "terminal-tab-label";
+    labelSpan.textContent = terminalDef.label;
+    tabButton.appendChild(labelSpan);
+
+    const closeSpan = document.createElement("span");
+    closeSpan.className = "terminal-tab-close";
+    closeSpan.textContent = "×";
+    tabButton.appendChild(closeSpan);
+
+    tabButton.addEventListener("click", (event) => {
+      if (event.target instanceof HTMLElement && event.target.closest(".terminal-tab-close")) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.handleTerminalTabClose(workspaceState, terminalDef.key);
+        return;
+      }
       void this.handleTerminalTabClick(workspaceState, terminalDef.key);
     });
 
-    workspaceState.terminalTabs.appendChild(tabButton);
+    const { addTerminalButton, terminalTabs } = workspaceState;
+    if (addTerminalButton && addTerminalButton.parentElement === terminalTabs) {
+      terminalTabs.insertBefore(tabButton, addTerminalButton);
+    } else {
+      terminalTabs.appendChild(tabButton);
+    }
 
     const record = {
       key: terminalDef.key,
       def: terminalDef,
       tabButton,
+      labelEl: labelSpan,
       panel: null,
       view: null,
       terminal: null,
@@ -649,10 +745,93 @@ class WorkspaceApp {
       sessionId: null,
       closed: false,
       quickCommandExecuted: false,
+      isPreset,
     };
 
     workspaceState.terminals.set(terminalDef.key, record);
     workspaceState.terminalDefs.set(terminalDef.key, terminalDef);
+
+    return record;
+  }
+
+  createAdHocTerminal(workspaceState) {
+    if (!workspaceState) return;
+
+    const nextIndex = (workspaceState.customTerminalCount ?? 0) + 1;
+    workspaceState.customTerminalCount = nextIndex;
+
+    let key;
+    do {
+      key = `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    } while (workspaceState.terminals.has(key));
+
+    const label = `Shell ${nextIndex}`;
+    const terminalDef = { key, label, quickCommand: "" };
+
+    this.setupTerminalTab(workspaceState, terminalDef, { isPreset: false });
+    void this.handleTerminalTabClick(workspaceState, key);
+  }
+
+  handleTerminalTabClose(workspaceState, terminalKey) {
+    if (!workspaceState) return;
+    const record = workspaceState.terminals.get(terminalKey);
+    if (!record) return;
+
+    const wasActive = workspaceState.activeTerminalKey === terminalKey;
+
+    record.resizeObserver?.disconnect();
+    if (record.terminal) {
+      record.terminal.dispose();
+    }
+
+    if (record.sessionId) {
+      this.sessionMap.delete(record.sessionId);
+      void this.terminalAPI.dispose(record.sessionId);
+    }
+
+    if (record.panel) {
+      record.panel.remove();
+    }
+
+    record.panel = null;
+    record.view = null;
+    record.terminal = null;
+    record.fitAddon = null;
+    record.resizeObserver = null;
+    record.sessionId = null;
+    record.quickCommandExecuted = false;
+
+    if (record.isPreset) {
+      record.closed = true;
+      record.tabButton.classList.add("is-exited");
+      if (wasActive) {
+        this.setActiveTerminal(workspaceState, null);
+      } else if (
+        !workspaceState.activeTerminalKey ||
+        !workspaceState.terminals.has(workspaceState.activeTerminalKey)
+      ) {
+        this.setActiveTerminal(workspaceState, null);
+      }
+      return;
+    }
+
+    workspaceState.terminals.delete(terminalKey);
+    workspaceState.terminalDefs.delete(terminalKey);
+    record.tabButton.remove();
+
+    if (wasActive) {
+      const remainingKeys = Array.from(workspaceState.terminals.keys());
+      const nextKey = remainingKeys.find((key) => {
+        const candidate = workspaceState.terminals.get(key);
+        return candidate && candidate.panel && candidate.terminal && !candidate.closed;
+      });
+      this.setActiveTerminal(workspaceState, nextKey ?? null);
+    } else if (
+      !workspaceState.activeTerminalKey ||
+      !workspaceState.terminals.has(workspaceState.activeTerminalKey)
+    ) {
+      this.setActiveTerminal(workspaceState, null);
+    }
   }
 
   async handleTerminalTabClick(workspaceState, terminalKey) {
@@ -707,6 +886,9 @@ class WorkspaceApp {
     if (workspaceState.placeholder?.isConnected) {
       workspaceState.placeholder.remove();
     }
+
+    record.tabButton.classList.remove("is-exited");
+    record.closed = false;
 
     const panel = document.createElement("div");
     panel.className = "terminal-panel";
@@ -775,8 +957,6 @@ class WorkspaceApp {
     record.panel = panel;
     record.resizeObserver = resizeObserver;
     record.closed = false;
-
-    record.tabButton.classList.remove("is-exited");
 
     this.sessionMap.set(sessionInfo.sessionId, record);
 

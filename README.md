@@ -18,6 +18,7 @@ tabs for common project commands.
 - Rescan a workspace to refresh status without reloading the entire list.
 - Delete workspaces with dirty-tree warnings so uncommitted work is never lost
   silently.
+- Launch integrated terminals for customizable quick commands or ad-hoc shells.
 
 ## Prerequisites
 
@@ -79,7 +80,19 @@ alongside the rest of your dotfiles. By default the app creates
       "workspaceRoot": "/absolute/path/to/worktrees"
     }
   },
-  "activeEnvironment": "default"
+  "activeEnvironment": "default",
+  "quickCommands": [
+    {
+      "key": "npm-install",
+      "label": "npm i",
+      "quickCommand": "npm i"
+    },
+    {
+      "key": "lerna-bootstrap",
+      "label": "npm run lerna:bootstrap",
+      "quickCommand": "npm run lerna:bootstrap"
+    }
+  ]
 }
 ```
 
@@ -88,6 +101,13 @@ with multiple repositories. The app exposes a dropdown in the header that lets
 you switch between the configured environments at runtime. The
 `activeEnvironment` key selects which environment is used when the app starts.
 All paths are resolved to absolute locations automatically.
+
+Populate the optional `quickCommands` array to configure the quick access tabs
+displayed for each workspace. Provide a stable `key`, a `label` for the tab
+title, and an optional `quickCommand` string to run automatically once the
+terminal session starts. Tabs created from this list stay available even after
+closing the running process, while ad-hoc shells can be spawned or removed on
+the fly inside the workspace view.
 
 To use an alternative settings location (useful for scripting or tests), set
 the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.

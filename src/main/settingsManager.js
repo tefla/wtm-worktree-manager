@@ -3,6 +3,23 @@ const { mkdir } = require("node:fs/promises");
 const { homedir } = require("node:os");
 const { dirname, join, resolve } = require("node:path");
 
+const DEFAULT_QUICK_COMMANDS = [
+  {
+    key: "npm-install",
+    label: "npm i",
+    quickCommand: "npm i",
+  },
+  {
+    key: "lerna-bootstrap",
+    label: "npm run lerna:bootstrap",
+    quickCommand: "npm run lerna:bootstrap",
+  },
+];
+
+function cloneQuickCommands(commands = DEFAULT_QUICK_COMMANDS) {
+  return commands.map((command) => ({ ...command }));
+}
+
 function defaultSettings() {
   const home = homedir();
   const defaultEnvironment = {
@@ -15,6 +32,7 @@ function defaultSettings() {
       default: defaultEnvironment,
     },
     activeEnvironment: "default",
+    quickCommands: cloneQuickCommands(),
   };
 }
 
@@ -65,9 +83,12 @@ class SettingsManager {
 
     const activeEnvironment = this.resolveActiveEnvironment(normalizedRaw.activeEnvironment, environments, defaults);
 
+    const quickCommands = this.normalizeQuickCommands(normalizedRaw.quickCommands, defaults.quickCommands);
+
     return {
       environments,
       activeEnvironment,
+      quickCommands,
     };
   }
 
@@ -83,6 +104,7 @@ class SettingsManager {
           },
         },
         activeEnvironment: "default",
+        quickCommands: defaults.quickCommands,
       };
     }
 
@@ -92,7 +114,67 @@ class SettingsManager {
     return {
       environments,
       activeEnvironment: source.activeEnvironment ?? defaults.activeEnvironment,
+      quickCommands: Array.isArray(source.quickCommands) ? source.quickCommands : defaults.quickCommands,
     };
+  }
+
+  normalizeQuickCommands(commandsRaw, defaults = DEFAULT_QUICK_COMMANDS) {
+    const fallback = Array.isArray(defaults) && defaults.length > 0 ? defaults : DEFAULT_QUICK_COMMANDS;
+    const source = Array.isArray(commandsRaw) ? commandsRaw : fallback;
+
+    const normalized = [];
+    const usedKeys = new Set();
+
+    const makeSlug = (value, index) => {
+      const base = typeof value === "string" ? value.trim() : "";
+      const fallbackKey = `quick-${index + 1}`;
+      if (!base) return fallbackKey;
+      const slug = base
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+/, "")
+        .replace(/-+$/, "");
+      return slug || fallbackKey;
+    };
+
+    source.forEach((entry, index) => {
+      if (!entry || typeof entry !== "object") {
+        return;
+      }
+
+      const label = typeof entry.label === "string" ? entry.label.trim() : "";
+      if (!label) {
+        return;
+      }
+
+      const rawKey = typeof entry.key === "string" ? entry.key.trim() : "";
+      const baseKey = rawKey || makeSlug(label, index);
+      let key = baseKey;
+      let suffix = 1;
+      while (usedKeys.has(key)) {
+        suffix += 1;
+        key = `${baseKey}-${suffix}`;
+      }
+
+      usedKeys.add(key);
+
+      const quickCommand = typeof entry.quickCommand === "string" ? entry.quickCommand.trim() : "";
+
+      normalized.push({
+        key,
+        label,
+        quickCommand,
+      });
+    });
+
+    if (normalized.length === 0) {
+      if (fallback !== source) {
+        return this.normalizeQuickCommands(fallback, fallback);
+      }
+      return cloneQuickCommands(fallback);
+    }
+
+    return normalized;
   }
 
   normalizeEnvironmentMap(environmentsRaw, defaults) {
@@ -172,6 +254,11 @@ class SettingsManager {
       throw new Error("Settings have not been loaded yet. Call load() first.");
     }
     return this.settings;
+  }
+
+  getQuickCommands() {
+    const settings = this.getSettings();
+    return settings.quickCommands.map((command) => ({ ...command }));
   }
 
   listEnvironments() {
