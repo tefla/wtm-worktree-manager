@@ -283,11 +283,11 @@ class WorkspaceApp {
         return;
       }
       this.rowElements.set(targetPath, row);
-      row.addEventListener("dblclick", (event) => {
+      row.addEventListener("click", (event) => {
         if (event.target instanceof HTMLElement && event.target.closest("button")) {
           return;
         }
-        this.handleWorkspaceRowDoubleClick(targetPath);
+        this.handleWorkspaceRowSelect(targetPath);
       });
     });
 
@@ -384,7 +384,7 @@ class WorkspaceApp {
     `;
   }
 
-  handleWorkspaceRowDoubleClick(path) {
+  handleWorkspaceRowSelect(path) {
     const workspace = this.workspaces.find((item) => item.path === path);
     if (!workspace || workspace.kind === "folder") {
       return;
