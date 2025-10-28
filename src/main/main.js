@@ -119,9 +119,11 @@ function exposeSettingsHandlers() {
     await settingsManager.load();
     const environments = settingsManager.listEnvironments();
     const active = settingsManager.getActiveEnvironment();
+    const quickAccess = settingsManager.getQuickAccess();
     return {
       environments,
       activeEnvironment: active.name,
+      quickAccess,
     };
   });
 
@@ -134,11 +136,13 @@ function exposeSettingsHandlers() {
     const environment = await settingsManager.setActiveEnvironment(name);
     workspaceManager.configure(environment);
     const environments = settingsManager.listEnvironments();
+    const quickAccess = settingsManager.getQuickAccess();
 
     return {
       activeEnvironment: environment.name,
       environment,
       environments,
+      quickAccess,
     };
   });
 }

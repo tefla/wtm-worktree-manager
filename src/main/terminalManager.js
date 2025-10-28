@@ -45,6 +45,7 @@ class TerminalManager {
       cols = 80,
       rows = 24,
       env = {},
+      label,
     } = params;
 
     if (!workspacePath || !slot) {
@@ -92,7 +93,7 @@ class TerminalManager {
       webContentsId,
     );
 
-    await terminalSessionStore.ensureTerminal(absPath, slot);
+    await terminalSessionStore.ensureTerminal(absPath, slot, { label });
 
     const session = this.sessions.get(result.sessionId);
     if (session && savedTerminal) {
