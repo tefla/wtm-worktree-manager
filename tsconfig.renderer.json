@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ES2020",
+    "outDir": "dist",
+    "rootDir": "src",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "jsx": "react",
+    "baseUrl": "./src",
+    "paths": {
+      "react": ["vendor/faux-react"],
+      "react-dom/client": ["vendor/faux-react-dom-client"]
+    }
+  },
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/vendor/**/*.ts"],
+  "exclude": ["node_modules"]
+}

@@ -2,11 +2,15 @@
   "name": "wtm-worktree-manager",
   "version": "0.1.0",
   "description": "WTM (WorkTree Manager) desktop UI for managing git worktrees",
-  "main": "src/main/main.js",
+  "main": "dist/main/main.js",
   "scripts": {
-    "dev": "ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
-    "start": "ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
-    "test:unit": "node --test tests/unit/**/*.test.js",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "tsc -p tsconfig.renderer.json",
+    "copy-static": "node scripts/copy-static.mjs",
+    "build": "npm run build:main && npm run build:renderer && npm run copy-static",
+    "dev": "npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
+    "start": "npm run dev",
+    "test:unit": "npm run build:main && node --test tests/unit",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },
@@ -15,8 +19,10 @@
     "@xterm/xterm": "^5.5.0",
     "node-pty": "^1.0.0"
   },
-  "devDependencies": {
-    "@playwright/test": "^1.47.2",
-    "electron": "^30.0.0"
+    "devDependencies": {
+      "@playwright/test": "^1.47.2",
+      "@types/node": "^22.5.2",
+      "electron": "^30.0.0",
+      "typescript": "^5.5.4"
+    }
   }
-}

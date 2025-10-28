@@ -1,16 +1,18 @@
-const { webContents } = require("electron");
-const { randomUUID } = require("node:crypto");
-const path = require("node:path");
-const { terminalSessionStore } = require("./terminalSessionStore");
-let pty;
+import { webContents } from "electron";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { terminalSessionStore, TerminalState, WorkspaceTerminalState } from "./terminalSessionStore";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let pty: typeof import("node-pty") | undefined;
 try {
-  // eslint-disable-next-line global-require, import/no-extraneous-dependencies
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   pty = require("node-pty");
 } catch (error) {
   console.error("Failed to load node-pty. Terminal features will be disabled until rebuilt.", error);
 }
 
-function resolveCommand(command) {
+function resolveCommand(command: string): string {
   if (process.platform === "win32") {
     if (command.endsWith(".cmd") || command.endsWith(".exe")) {
       return command;
@@ -20,7 +22,7 @@ function resolveCommand(command) {
   return command;
 }
 
-function defaultShellArgs(commandPath) {
+function defaultShellArgs(commandPath: string): string[] {
   const base = path.basename(commandPath);
   if (!base) return ["-i"];
   if (base.includes("fish")) return ["-i"];
@@ -30,23 +32,53 @@ function defaultShellArgs(commandPath) {
   return ["-i"];
 }
 
+export interface TerminalSession {
+  id: string;
+  workspacePath: string;
+  slot: string;
+  command: string;
+  args: string[];
+  pty: import("node-pty").IPty;
+  webContentsId: number;
+  quickCommandExecuted: boolean;
+  closed: boolean;
+}
+
+export interface EnsureSessionParams {
+  workspacePath: string;
+  slot: string;
+  command?: string;
+  args?: string[];
+  cols?: number;
+  rows?: number;
+  env?: NodeJS.ProcessEnv;
+  label?: string;
+}
+
+export interface EnsureSessionResult {
+  sessionId: string;
+  workspacePath: string;
+  slot: string;
+  command: string;
+  args?: string[];
+  existing: boolean;
+  history: string;
+  quickCommandExecuted: boolean;
+  lastExitCode: number | null;
+  lastSignal: string | null;
+}
+
 class TerminalManager {
+  private sessions: Map<string, TerminalSession>;
+  private workspaceIndex: Map<string, Map<string, string>>;
+
   constructor() {
-    this.sessions = new Map(); // sessionId -> session
-    this.workspaceIndex = new Map(); // workspacePath -> Map(slot -> sessionId)
+    this.sessions = new Map();
+    this.workspaceIndex = new Map();
   }
 
-  async ensureSession(params, webContentsId) {
-    const {
-      workspacePath,
-      slot,
-      command,
-      args,
-      cols = 80,
-      rows = 24,
-      env = {},
-      label,
-    } = params;
+  async ensureSession(params: EnsureSessionParams, webContentsId: number): Promise<EnsureSessionResult> {
+    const { workspacePath, slot, command, args, cols = 80, rows = 24, env = {}, label } = params;
 
     if (!workspacePath || !slot) {
       throw new Error("workspacePath and slot are required to create a terminal session.");
@@ -109,7 +141,18 @@ class TerminalManager {
     };
   }
 
-  createSession(params, webContentsId) {
+  private createSession(
+    params: {
+      workspacePath: string;
+      slot: string;
+      command: string;
+      args?: string[];
+      cols: number;
+      rows: number;
+      env?: NodeJS.ProcessEnv;
+    },
+    webContentsId: number,
+  ) {
     const { workspacePath, slot, command, args, cols, rows, env } = params;
     if (!pty) {
       throw new Error(
@@ -132,7 +175,7 @@ class TerminalManager {
       },
     });
 
-    const session = {
+    const session: TerminalSession = {
       id: sessionId,
       workspacePath,
       slot,
@@ -148,9 +191,9 @@ class TerminalManager {
     if (!this.workspaceIndex.has(workspacePath)) {
       this.workspaceIndex.set(workspacePath, new Map());
     }
-    this.workspaceIndex.get(workspacePath).set(slot, sessionId);
+    this.workspaceIndex.get(workspacePath)?.set(slot, sessionId);
 
-    ptyProcess.onData((data) => {
+    ptyProcess.onData((data: string) => {
       this.emitData(sessionId, data);
     });
 
@@ -168,7 +211,7 @@ class TerminalManager {
     };
   }
 
-  emitData(sessionId, data) {
+  private emitData(sessionId: string, data: string) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -185,7 +228,7 @@ class TerminalManager {
     void terminalSessionStore.appendHistory(session.workspacePath, session.slot, data);
   }
 
-  handleExit(sessionId, event) {
+  private async handleExit(sessionId: string, event: { exitCode?: number | null; signal?: number | string | null }) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -195,108 +238,74 @@ class TerminalManager {
       contents.send("terminal:exit", {
         sessionId,
         exitCode: event?.exitCode ?? null,
-        signal: event?.signal ?? null,
+        signal: (typeof event?.signal === "string" || typeof event?.signal === "number")
+          ? String(event.signal)
+          : null,
       });
     }
 
-    void terminalSessionStore.markExit(
-      session.workspacePath,
-      session.slot,
-      event?.exitCode ?? null,
-      event?.signal ?? null,
-    );
+    await terminalSessionStore.markExit(session.workspacePath, session.slot, event?.exitCode ?? null, event?.signal as string);
+    this.dispose(sessionId, { skipPersist: true }).catch((error) => {
+      console.error("Failed to dispose terminal session", error);
+    });
   }
 
-  write(sessionId, data) {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.closed) return;
-    session.pty.write(data);
-  }
-
-  resize(sessionId, cols, rows) {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.closed) return;
-    session.pty.resize(cols, rows);
-  }
-
-  async dispose(sessionId, options = {}) {
-    const preserve = Boolean(options.preserve);
+  async dispose(sessionId: string, options: { skipPersist?: boolean } = {}): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    try {
-      session.pty.kill();
-    } catch (error) {
-      console.warn(`Failed to kill terminal session ${sessionId}`, error);
-    }
-
-    session.closed = true;
     this.sessions.delete(sessionId);
+    const workspaceIndex = this.workspaceIndex.get(session.workspacePath);
+    workspaceIndex?.delete(session.slot);
 
-    const slotIndex = this.workspaceIndex.get(session.workspacePath);
-    if (slotIndex?.get(session.slot) === sessionId) {
-      slotIndex.delete(session.slot);
-    }
-    if (slotIndex && slotIndex.size === 0) {
-      this.workspaceIndex.delete(session.workspacePath);
+    if (session.pty) {
+      try {
+        session.pty.kill();
+      } catch (error) {
+        console.error("Failed to kill terminal", error);
+      }
     }
 
-    if (!preserve) {
+    if (!options.skipPersist) {
       await terminalSessionStore.clearTerminal(session.workspacePath, session.slot);
     }
   }
 
-  listSessionsForWorkspace(workspacePath) {
-    const absPath = path.resolve(workspacePath);
-    const slotIndex = this.workspaceIndex.get(absPath);
-    if (!slotIndex) return [];
-    return Array.from(slotIndex.values())
-      .map((sessionId) => this.sessions.get(sessionId))
-      .filter(Boolean)
-      .map((session) => ({
-        sessionId: session.id,
-        workspacePath: session.workspacePath,
-        slot: session.slot,
-        command: session.command,
-        args: session.args,
-        closed: session.closed,
-      }));
+  async resize(sessionId: string, cols: number, rows: number): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.pty.resize(cols, rows);
   }
 
-  lookupSession(workspacePath, slot) {
-    const absPath = path.resolve(workspacePath);
-    const slotIndex = this.workspaceIndex.get(absPath);
-    if (!slotIndex) return null;
-    const sessionId = slotIndex.get(slot);
-    if (!sessionId) return null;
-    return this.sessions.get(sessionId) ?? null;
+  async write(sessionId: string, data: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.pty.write(data);
   }
 
-  async markQuickCommandExecuted(workspacePath, slot) {
-    await terminalSessionStore.markQuickCommand(workspacePath, slot);
-    const session = this.lookupSession(workspacePath, slot);
-    if (session) {
-      session.quickCommandExecuted = true;
-    }
+  async listSessionsForWorkspace(workspacePath: string): Promise<Record<string, TerminalState>> {
+    return terminalSessionStore.listSessionsForWorkspace(workspacePath);
   }
 
-  async setActiveTerminal(workspacePath, slot) {
-    await terminalSessionStore.setActiveTerminal(workspacePath, slot ?? null);
-  }
-
-  async getWorkspaceState(workspacePath) {
+  async getWorkspaceState(workspacePath: string): Promise<WorkspaceTerminalState> {
     return terminalSessionStore.getWorkspaceState(workspacePath);
   }
 
-  async listSavedWorkspaces() {
+  async listSavedWorkspaces(): Promise<string[]> {
     return terminalSessionStore.listWorkspaces();
   }
 
-  async clearWorkspaceState(workspacePath) {
-    await terminalSessionStore.clearWorkspace(workspacePath);
+  async markQuickCommandExecuted(workspacePath: string, slot: string): Promise<void> {
+    await terminalSessionStore.markQuickCommandExecuted(workspacePath, slot);
+  }
+
+  async setActiveTerminal(workspacePath: string, slot: string | null): Promise<void> {
+    await terminalSessionStore.setActiveTerminalSlot(workspacePath, slot);
+  }
+
+  async clearWorkspaceState(workspacePath: string): Promise<void> {
+    await terminalSessionStore.clearWorkspaceState(workspacePath);
   }
 }
 
-module.exports = {
-  terminalManager: new TerminalManager(),
-};
+export const terminalManager = new TerminalManager();
