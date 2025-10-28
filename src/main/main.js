@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("node:path");
 const { workspaceManager } = require("./workspaceManager");
+const { terminalManager } = require("./terminalManager");
+const { settingsManager } = require("./settingsManager");
 
 const isMac = process.platform === "darwin";
 
@@ -60,8 +62,47 @@ function exposeWorkspaceHandlers() {
   });
 }
 
+function exposeTerminalHandlers() {
+  ipcMain.handle("terminal:ensure", (event, params) => {
+    return terminalManager.ensureSession(params || {}, event.sender.id);
+  });
+
+  ipcMain.on("terminal:write", (_event, params) => {
+    if (!params?.sessionId || typeof params.data !== "string") return;
+    terminalManager.write(params.sessionId, params.data);
+  });
+
+  ipcMain.handle("terminal:resize", (_event, params) => {
+    if (!params?.sessionId || typeof params.cols !== "number" || typeof params.rows !== "number") {
+      return;
+    }
+    terminalManager.resize(params.sessionId, params.cols, params.rows);
+  });
+
+  ipcMain.handle("terminal:dispose", (_event, params) => {
+    if (!params?.sessionId) return;
+    terminalManager.dispose(params.sessionId);
+  });
+
+  ipcMain.handle("terminal:listForWorkspace", (_event, params) => {
+    if (!params?.workspacePath) return [];
+    return terminalManager.listSessionsForWorkspace(params.workspacePath);
+  });
+}
+
 app.whenReady().then(async () => {
+  try {
+    const settings = await settingsManager.load();
+    workspaceManager.configure(settings);
+  } catch (error) {
+    dialog.showErrorBox(
+      "WTM Settings Error",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
   exposeWorkspaceHandlers();
+  exposeTerminalHandlers();
   await createWindow();
 
   app.on("activate", async () => {

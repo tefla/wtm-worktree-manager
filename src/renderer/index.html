@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WTM (WorkTree Manager)</title>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -11,7 +12,7 @@
       <header class="app-header">
         <div class="header-text">
           <h1>WTM (WorkTree Manager)</h1>
-          <p>Manage git worktrees for <code>~/dev/refsix/scorza</code></p>
+          <p>Manage git worktrees for your project repositories</p>
         </div>
         <div class="header-actions">
           <button id="refresh-button" class="accent-button" type="button">Refresh</button>
@@ -26,7 +27,7 @@
               id="branch-input"
               name="branch"
               type="text"
-              placeholder="SCORZA-1234-awesome-feature"
+              placeholder="PROJ-1234-awesome-feature"
               required
             />
           </label>
@@ -44,18 +45,35 @@
           </button>
         </form>
         <p class="hint">
-          Workspaces live in <code>~/dev/refsix/workspaces</code>. New branches fall back to
-          <code>origin/develop</code> when no remote exists.
+          Workspaces are created under the path configured in your settings file. New branches fall back
+          to <code>origin/develop</code> when no remote exists.
         </p>
       </section>
 
       <main class="workspace-area">
-        <div id="workspace-list" class="workspace-list" aria-live="polite"></div>
+        <aside class="workspace-sidebar">
+          <header class="workspace-sidebar-header">
+            <span>Workspaces</span>
+          </header>
+          <div id="workspace-list" class="workspace-list" aria-live="polite"></div>
+        </aside>
+        <section id="workspace-detail" class="workspace-detail">
+          <div id="workspace-detail-placeholder" class="detail-placeholder">
+            <h2>Workspace Details</h2>
+            <p>Select a workspace from the list to see more information.</p>
+          </div>
+          <div id="workspace-tabs" class="workspace-tabs is-hidden">
+            <div id="workspace-tab-bar" class="workspace-tab-bar"></div>
+            <div id="workspace-tab-panels" class="workspace-tab-panels"></div>
+          </div>
+        </section>
       </main>
 
       <div id="toast-container" class="toast-container"></div>
     </div>
 
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script src="./index.js"></script>
   </body>
 </html>

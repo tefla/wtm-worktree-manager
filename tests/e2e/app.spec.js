@@ -12,8 +12,8 @@ async function runGit(args, options) {
 }
 
 async function setupGitWorkspace() {
-  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "scorza-repo-"));
-  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "scorza-workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "wtm-repo-"));
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wtm-workspaces-"));
 
   await runGit(["init"], { cwd: repoDir });
   await runGit(["checkout", "-b", "main"], { cwd: repoDir });
@@ -31,10 +31,25 @@ async function setupGitWorkspace() {
 
   await fs.mkdir(path.join(workspaceRoot, "orphan-folder"));
 
+  const settingsPath = path.join(os.tmpdir(), `wtm-settings-${Date.now()}.json`);
+  await fs.writeFile(
+    settingsPath,
+    JSON.stringify(
+      {
+        repoDir,
+        workspaceRoot,
+      },
+      null,
+      2,
+    ),
+  );
+
   return {
     repoDir,
     workspaceRoot,
+    settingsPath,
     async cleanup() {
+      await fs.rm(settingsPath, { force: true });
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await runGit(["worktree", "prune"], { cwd: repoDir }).catch(() => {});
       await fs.rm(repoDir, { recursive: true, force: true });
@@ -53,21 +68,20 @@ test("lists git worktrees and unmanaged folders", async () => {
       ...process.env,
       ELECTRON_DISABLE_SANDBOX: "1",
       ELECTRON_DISABLE_GPU: process.env.ELECTRON_DISABLE_GPU ?? "1",
-      SCORZA_REPO_DIR: setup.repoDir,
-      SCORZA_WORKSPACE_ROOT: setup.workspaceRoot,
+      WTM_SETTINGS_PATH: setup.settingsPath,
     },
   });
 
   const window = await electronApp.firstWindow();
   await window.waitForSelector("text=WTM (WorkTree Manager)", { timeout: 20000 });
-  await expect(window.locator(".workspace-card")).toHaveCount(2);
+  await expect(window.locator(".workspace-row")).toHaveCount(2);
 
-  const worktreeCard = window.locator(".workspace-card", { hasText: "feature/test" });
-  await expect(worktreeCard.locator("button:has-text('Delete')")).toHaveCount(1);
+  const worktreeRow = window.locator('.workspace-row[data-kind="worktree"]', { hasText: "feature/test" });
+  await expect(worktreeRow.locator('button[aria-label="Delete workspace"]')).toHaveCount(1);
 
-  const folderCard = window.locator(".workspace-card", { hasText: "orphan-folder" });
-  await expect(folderCard.locator("button")).toHaveCount(0);
-  await expect(folderCard).toContainText("Folder (not a git worktree)");
+  const folderRow = window.locator('.workspace-row[data-kind="folder"]', { hasText: "orphan-folder" });
+  await expect(folderRow.locator("button")).toHaveCount(0);
+  await expect(folderRow.locator(".status-icon.folder")).toHaveCount(1);
 
   await electronApp.close();
   await setup.cleanup();

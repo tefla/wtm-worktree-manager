@@ -4,6 +4,21 @@ const ToastKind = {
   ERROR: "error",
 };
 
+const DEFAULT_TERMINALS = [
+  {
+    key: "npm-install",
+    label: "npm i",
+    command: "npm",
+    args: ["i"],
+  },
+  {
+    key: "lerna-bootstrap",
+    label: "npm run lerna:bootstrap",
+    command: "npm",
+    args: ["run", "lerna:bootstrap"],
+  },
+];
+
 function escapeHtml(value) {
   if (!value) return "";
   return value
@@ -53,6 +68,15 @@ class ToastManager {
 class WorkspaceApp {
   constructor(workspaceAPI) {
     this.workspaceAPI = workspaceAPI;
+    this.terminalAPI = window.terminalAPI;
+    if (!this.terminalAPI) {
+      throw new Error("Terminal API bridge missing from preload context.");
+    }
+    this.TerminalCtor = window.Terminal;
+    this.FitAddonCtor = window.FitAddon?.FitAddon;
+    if (!this.TerminalCtor || !this.FitAddonCtor) {
+      throw new Error("Terminal dependencies failed to load.");
+    }
     this.toast = new ToastManager("toast-container");
     this.listEl = this.requireElement("workspace-list");
     this.createForm = this.requireElement("create-form");
@@ -60,9 +84,26 @@ class WorkspaceApp {
     this.baseInput = this.requireElement("base-input");
     this.createButton = this.requireElement("create-button");
     this.refreshButton = this.requireElement("refresh-button");
+    this.tabsContainer = this.requireElement("workspace-tabs");
+    this.tabBar = this.requireElement("workspace-tab-bar");
+    this.tabPanels = this.requireElement("workspace-tab-panels");
+    this.placeholderEl = this.requireElement("workspace-detail-placeholder");
 
     this.workspaces = [];
     this.isRefreshing = false;
+    this.openWorkspaces = new Map();
+    this.activeWorkspacePath = null;
+    this.sessionMap = new Map();
+    this.rowElements = new Map();
+    this.unsubscribe = [];
+    this.defaultTerminals = DEFAULT_TERMINALS;
+
+    this.unsubscribe.push(this.terminalAPI.onData((payload) => this.handleTerminalData(payload)));
+    this.unsubscribe.push(this.terminalAPI.onExit((payload) => this.handleTerminalExit(payload)));
+
+    this.handleWindowResizeBound = () => this.handleWindowResize();
+    window.addEventListener("resize", this.handleWindowResizeBound);
+    window.addEventListener("beforeunload", () => this.teardown());
 
     this.setupEventListeners();
     this.renderLoading();
@@ -218,10 +259,37 @@ class WorkspaceApp {
       return;
     }
 
-    const cards = this.workspaces.map((workspace) => this.renderWorkspaceCard(workspace)).join("");
-    console.log("render() inserting", this.workspaces.length, "cards");
-    console.log(cards);
-    this.listEl.innerHTML = cards;
+    const rows = this.workspaces.map((workspace) => this.renderWorkspaceRow(workspace)).join("");
+    this.listEl.innerHTML = rows;
+    this.rowElements.clear();
+
+    const pathsToRemove = [];
+    this.openWorkspaces.forEach((state, path) => {
+      const updated = this.workspaces.find((item) => item.path === path);
+      if (updated) {
+        state.workspace = updated;
+        const label = updated.branch || updated.relativePath || updated.path;
+        state.tabButton.textContent = label;
+        state.tabButton.title = `${label}\n${updated.path}`;
+      } else {
+        pathsToRemove.push(path);
+      }
+    });
+    pathsToRemove.forEach((path) => this.closeWorkspaceTab(path));
+
+    this.listEl.querySelectorAll(".workspace-row").forEach((row) => {
+      const targetPath = row.dataset.path;
+      if (!targetPath) {
+        return;
+      }
+      this.rowElements.set(targetPath, row);
+      row.addEventListener("dblclick", (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest("button")) {
+          return;
+        }
+        this.handleWorkspaceRowDoubleClick(targetPath);
+      });
+    });
 
     this.listEl.querySelectorAll("button[data-action=\"delete\"]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -239,79 +307,426 @@ class WorkspaceApp {
         const targetPath = button.dataset.path;
         if (!targetPath) return;
         button.disabled = true;
-        const originalText = button.textContent;
-        button.textContent = "Rescanning…";
+        button.classList.add("is-loading");
         void this.refreshSingle(targetPath).finally(() => {
           button.disabled = false;
-          button.textContent = originalText;
+          button.classList.remove("is-loading");
         });
       });
     });
+
+    this.updateActiveRowHighlight();
   }
 
-  renderWorkspaceCard(workspace) {
+  renderWorkspaceRow(workspace) {
     const status = workspace.status;
     const isFolder = workspace.kind === "folder";
+    const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
     const statusClass = isFolder ? "folder" : status.clean ? "clean" : "dirty";
-    const statusLabel = status.summary;
+    const tooltipLines = [
+      `Branch: ${branchLabel}`,
+      `Worktree: ${workspace.relativePath || "—"}`,
+      `Path: ${workspace.path}`,
+      `HEAD: ${workspace.headSha || "—"}`,
+      status.upstream ? `Upstream: ${status.upstream}` : "Upstream: —",
+      `Status: ${status.summary}`,
+    ];
 
-    const aheadBehindParts = [];
-    if (status.ahead) aheadBehindParts.push(`↑ ${status.ahead}`);
-    if (status.behind) aheadBehindParts.push(`↓ ${status.behind}`);
-    const aheadBehind = aheadBehindParts.length > 0 ? aheadBehindParts.join(" · ") : "Up to date";
-
-    const upstreamInfo = status.upstream
-      ? `<div>Tracking: <code>${escapeHtml(status.upstream)}</code> — ${escapeHtml(aheadBehind)}</div>`
-      : `<div>Tracking: <code>—</code> — ${escapeHtml(aheadBehind)}</div>`;
-
-    let changesDetail = "";
-    if (!status.clean) {
-      const extra = status.sampleChanges.length < status.changeCount
-        ? `<div><code>…and ${status.changeCount - status.sampleChanges.length} more</code></div>`
-        : "";
-      changesDetail = `<div class="changes">${status.sampleChanges
-        .map((line) => `<div><code>${escapeHtml(line)}</code></div>`)
-        .join("")}${extra}</div>`;
+    if (!status.clean && status.changeCount) {
+      tooltipLines.push(
+        `${status.changeCount} uncommitted change${status.changeCount === 1 ? "" : "s"}`,
+      );
     }
 
-    const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
+    if (workspace.lastCommit) {
+      tooltipLines.push(
+        `Last commit: ${workspace.lastCommit.shortSha} ${workspace.lastCommit.relativeTime} — ${workspace.lastCommit.subject}`,
+      );
+    }
 
-    const commitDetail = workspace.lastCommit
-      ? `<div>Last commit: <code>${escapeHtml(workspace.lastCommit.shortSha)}</code> ${escapeHtml(
-          workspace.lastCommit.relativeTime,
-        )} — ${escapeHtml(workspace.lastCommit.subject)}</div>`
-      : "";
+    const tooltip = tooltipLines.map((line) => escapeHtml(line)).join("&#10;");
+    const icons = this.buildStatusIcons(workspace);
 
     const actionsHtml = isFolder
-      ? '<div class="workspace-actions info">Not linked as a git worktree.</div>'
+      ? ""
       : `
-        <div class="workspace-actions">
-          <button class="ghost-button" data-action="refresh" data-path="${escapeHtml(workspace.path)}">Rescan</button>
-          <button class="danger-button" data-action="delete" data-path="${escapeHtml(workspace.path)}">Delete</button>
+        <div class="workspace-row-actions">
+          <button
+            class="row-icon-button"
+            data-action="refresh"
+            data-path="${escapeHtml(workspace.path)}"
+            aria-label="Rescan workspace"
+            title="Rescan workspace"
+          >⟳</button>
+          <button
+            class="row-icon-button danger"
+            data-action="delete"
+            data-path="${escapeHtml(workspace.path)}"
+            aria-label="Delete workspace"
+            title="Delete workspace"
+          >✖</button>
         </div>`;
 
     return `
-      <article class="workspace-card" data-path="${escapeHtml(workspace.path)}">
-        <div class="workspace-heading">
-          <div class="workspace-title">
-            <h2>${escapeHtml(branchLabel)}</h2>
-            <span class="status-pill ${statusClass}">
-              <span class="dot"></span>
-              ${escapeHtml(statusLabel)}
-            </span>
-          </div>
-          <div class="workspace-meta">
-            <div>Worktree: <code>${escapeHtml(workspace.relativePath)}</code></div>
-            <div>Path: <code>${escapeHtml(workspace.path)}</code></div>
-            <div>HEAD: <code>${escapeHtml(workspace.headSha || "—")}</code></div>
-            ${upstreamInfo}
-            ${commitDetail}
-            ${changesDetail}
-          </div>
+      <div
+        class="workspace-row ${statusClass}"
+        data-path="${escapeHtml(workspace.path)}"
+        data-kind="${isFolder ? "folder" : "worktree"}"
+        title="${tooltip}"
+      >
+        <div class="workspace-primary">
+          <span class="workspace-marker"></span>
+          <span class="workspace-name">${escapeHtml(branchLabel)}</span>
         </div>
+        <div class="workspace-icons">${icons}</div>
         ${actionsHtml}
-      </article>
+      </div>
     `;
+  }
+
+  handleWorkspaceRowDoubleClick(path) {
+    const workspace = this.workspaces.find((item) => item.path === path);
+    if (!workspace || workspace.kind === "folder") {
+      return;
+    }
+    this.openWorkspaceTab(workspace);
+  }
+
+  openWorkspaceTab(workspace) {
+    const existing = this.openWorkspaces.get(workspace.path);
+    if (existing) {
+      this.activateWorkspaceTab(workspace.path);
+      return;
+    }
+
+    const tabButton = document.createElement("button");
+    tabButton.className = "workspace-tab";
+    tabButton.type = "button";
+    const label = workspace.branch || workspace.relativePath || workspace.path;
+    tabButton.textContent = label;
+    tabButton.title = `${label}\n${workspace.path}`;
+    tabButton.addEventListener("click", () => {
+      this.activateWorkspaceTab(workspace.path);
+    });
+
+    const panel = document.createElement("div");
+    panel.className = "workspace-panel";
+    panel.dataset.path = workspace.path;
+
+    const terminalTabs = document.createElement("div");
+    terminalTabs.className = "terminal-tabs";
+
+    const terminalPanels = document.createElement("div");
+    terminalPanels.className = "terminal-panels";
+
+    panel.appendChild(terminalTabs);
+    panel.appendChild(terminalPanels);
+
+    this.tabBar.appendChild(tabButton);
+    this.tabPanels.appendChild(panel);
+
+    const workspaceState = {
+      workspace,
+      tabButton,
+      panel,
+      terminalTabs,
+      terminalPanels,
+      terminals: new Map(),
+      activeTerminalKey: null,
+    };
+
+    this.openWorkspaces.set(workspace.path, workspaceState);
+    this.updateWorkspacePlaceholderVisibility();
+
+    this.defaultTerminals.forEach((terminalDef) => {
+      void this.ensureWorkspaceTerminal(workspaceState, terminalDef);
+    });
+
+    this.activateWorkspaceTab(workspace.path);
+  }
+
+  activateWorkspaceTab(path) {
+    this.activeWorkspacePath = path;
+    this.openWorkspaces.forEach((state, key) => {
+      const isActive = key === path;
+      state.tabButton.classList.toggle("is-active", isActive);
+      state.panel.classList.toggle("is-active", isActive);
+      if (isActive) {
+        if (!state.activeTerminalKey && this.defaultTerminals.length > 0) {
+          state.activeTerminalKey = this.defaultTerminals[0].key;
+        }
+        if (state.activeTerminalKey) {
+          this.activateTerminal(state, state.activeTerminalKey);
+        }
+      }
+    });
+    this.updateActiveRowHighlight();
+  }
+
+  activateTerminal(workspaceState, terminalKey) {
+    const record = workspaceState.terminals.get(terminalKey);
+    if (!record) return;
+
+    workspaceState.activeTerminalKey = terminalKey;
+    workspaceState.terminals.forEach((entry, key) => {
+      const isActive = key === terminalKey;
+      entry.tabButton.classList.toggle("is-active", isActive);
+      entry.panel.classList.toggle("is-active", isActive);
+      if (isActive) {
+        requestAnimationFrame(() => {
+          entry.fitAddon.fit();
+          if (!entry.closed) {
+            this.terminalAPI.resize(entry.sessionId, entry.terminal.cols, entry.terminal.rows);
+          }
+          entry.terminal.focus();
+        });
+      }
+    });
+  }
+
+  async ensureWorkspaceTerminal(workspaceState, terminalDef) {
+    if (workspaceState.terminals.has(terminalDef.key)) {
+      const existing = workspaceState.terminals.get(terminalDef.key);
+      if (existing) {
+        existing.tabButton.classList.remove("is-exited");
+      }
+      return workspaceState.terminals.get(terminalDef.key);
+    }
+
+    const tabButton = document.createElement("button");
+    tabButton.className = "terminal-tab";
+    tabButton.type = "button";
+    tabButton.textContent = terminalDef.label;
+    tabButton.title = terminalDef.label;
+
+    const panel = document.createElement("div");
+    panel.className = "terminal-panel";
+    panel.dataset.key = terminalDef.key;
+
+    const view = document.createElement("div");
+    view.className = "terminal-view";
+    panel.appendChild(view);
+
+    workspaceState.terminalTabs.appendChild(tabButton);
+    workspaceState.terminalPanels.appendChild(panel);
+
+    const terminal = new this.TerminalCtor({
+      convertEol: true,
+      fontSize: 12,
+      fontFamily: '"JetBrains Mono", "Fira Code", "SFMono-Regular", monospace',
+      theme: {
+        background: "#070d1d",
+        foreground: "#d1d5db",
+        cursor: "#38bdf8",
+        selectionBackground: "#1e293b",
+      },
+      scrollback: 2000,
+    });
+
+    const fitAddon = new this.FitAddonCtor();
+    terminal.loadAddon(fitAddon);
+
+    terminal.open(view);
+    fitAddon.fit();
+
+    let sessionInfo;
+    try {
+      sessionInfo = await this.terminalAPI.ensureSession({
+        workspacePath: workspaceState.workspace.path,
+        slot: terminalDef.key,
+        command: terminalDef.command,
+        args: terminalDef.args,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      });
+    } catch (error) {
+      console.error("Failed to create terminal session", error);
+      this.toast.error(`Failed to start terminal: ${terminalDef.label}`);
+      terminal.dispose();
+      workspaceState.terminalTabs.removeChild(tabButton);
+      workspaceState.terminalPanels.removeChild(panel);
+      return null;
+    }
+
+    this.terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows);
+
+    terminal.onData((data) => {
+      this.terminalAPI.write(sessionInfo.sessionId, data);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+      this.terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows);
+    });
+    resizeObserver.observe(view);
+
+    const record = {
+      key: terminalDef.key,
+      sessionId: sessionInfo.sessionId,
+      terminal,
+      fitAddon,
+      view,
+      tabButton,
+      panel,
+      resizeObserver,
+      closed: false,
+    };
+
+    tabButton.addEventListener("click", () => {
+      this.activateTerminal(workspaceState, terminalDef.key);
+    });
+
+    workspaceState.terminals.set(terminalDef.key, record);
+    this.sessionMap.set(sessionInfo.sessionId, record);
+
+    if (
+      !workspaceState.activeTerminalKey ||
+      workspaceState.activeTerminalKey === terminalDef.key
+    ) {
+      this.activateTerminal(workspaceState, terminalDef.key);
+    }
+
+    return record;
+  }
+
+  closeWorkspaceTab(path, options = {}) {
+    const { silent = false } = options;
+    const workspaceState = this.openWorkspaces.get(path);
+    if (!workspaceState) return;
+
+    workspaceState.terminals.forEach((record) => {
+      record.resizeObserver?.disconnect();
+      record.terminal.dispose();
+      this.sessionMap.delete(record.sessionId);
+      void this.terminalAPI.dispose(record.sessionId);
+    });
+    workspaceState.terminals.clear();
+
+    workspaceState.tabButton.remove();
+    workspaceState.panel.remove();
+    this.openWorkspaces.delete(path);
+
+    if (this.activeWorkspacePath === path) {
+      this.activeWorkspacePath = null;
+      if (!silent) {
+        const iterator = this.openWorkspaces.keys();
+        const next = iterator.next();
+        if (!next.done) {
+          this.activateWorkspaceTab(next.value);
+        }
+      }
+    }
+
+    this.updateWorkspacePlaceholderVisibility();
+    this.updateActiveRowHighlight();
+  }
+
+  updateWorkspacePlaceholderVisibility() {
+    if (this.openWorkspaces.size === 0) {
+      this.placeholderEl.classList.remove("is-hidden");
+      this.tabsContainer.classList.add("is-hidden");
+    } else {
+      this.placeholderEl.classList.add("is-hidden");
+      this.tabsContainer.classList.remove("is-hidden");
+    }
+  }
+
+  updateActiveRowHighlight() {
+    this.rowElements.forEach((row, path) => {
+      row.classList.toggle("is-active", path === this.activeWorkspacePath);
+    });
+  }
+
+  handleTerminalData(payload) {
+    const record = payload ? this.sessionMap.get(payload.sessionId) : undefined;
+    if (!record) {
+      return;
+    }
+    record.terminal.write(payload.data);
+  }
+
+  handleTerminalExit(payload) {
+    const record = payload ? this.sessionMap.get(payload.sessionId) : undefined;
+    if (!record || record.closed) {
+      return;
+    }
+    record.closed = true;
+    record.tabButton.classList.add("is-exited");
+    const exitCode = payload.exitCode ?? 0;
+    const signal = payload.signal ? ` (signal ${payload.signal})` : "";
+    record.terminal.write(
+      `\r\n\x1b[38;5;110mProcess exited with code ${exitCode}${signal}\x1b[0m\r\n`,
+    );
+  }
+
+  handleWindowResize() {
+    if (!this.activeWorkspacePath) return;
+    const workspaceState = this.openWorkspaces.get(this.activeWorkspacePath);
+    if (!workspaceState || !workspaceState.activeTerminalKey) return;
+    const record = workspaceState.terminals.get(workspaceState.activeTerminalKey);
+    if (!record || record.closed) return;
+    record.fitAddon.fit();
+    this.terminalAPI.resize(record.sessionId, record.terminal.cols, record.terminal.rows);
+  }
+
+  teardown() {
+    window.removeEventListener("resize", this.handleWindowResizeBound);
+    this.unsubscribe.forEach((unsubscribe) => {
+      try {
+        unsubscribe?.();
+      } catch (error) {
+        console.warn("Failed to remove terminal listener", error);
+      }
+    });
+    this.unsubscribe = [];
+
+    const openPaths = Array.from(this.openWorkspaces.keys());
+    openPaths.forEach((path) => this.closeWorkspaceTab(path, { silent: true }));
+  }
+
+  buildStatusIcons(workspace) {
+    const status = workspace.status;
+    if (workspace.kind === "folder") {
+      return '<span class="status-icon folder" title="Folder not linked to a git worktree">📁</span>';
+    }
+
+    const icons = [];
+    if (status.clean) {
+      icons.push('<span class="status-icon clean" title="Clean working tree">✔</span>');
+    } else {
+      const changeCount = status.changeCount ?? 0;
+      const changeLabel =
+        changeCount > 0
+          ? `${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`
+          : status.summary;
+      const warningText =
+        changeCount > 0 ? `⚠${escapeHtml(String(changeCount))}` : "⚠";
+      icons.push(
+        `<span class="status-icon dirty" title="${escapeHtml(changeLabel)}">${warningText}</span>`,
+      );
+    }
+
+    if (status.ahead) {
+      icons.push(
+        `<span class="status-icon ahead" title="Ahead by ${escapeHtml(
+          String(status.ahead),
+        )} commit${status.ahead === 1 ? "" : "s"}">↑${escapeHtml(String(status.ahead))}</span>`,
+      );
+    }
+
+    if (status.behind) {
+      icons.push(
+        `<span class="status-icon behind" title="Behind by ${escapeHtml(
+          String(status.behind),
+        )} commit${status.behind === 1 ? "" : "s"}">↓${escapeHtml(String(status.behind))}</span>`,
+      );
+    }
+
+    if (icons.length === 0) {
+      icons.push('<span class="status-icon" title="No status information">•</span>');
+    }
+
+    return icons.join("");
   }
 
   sortWorkspaces(workspaces) {

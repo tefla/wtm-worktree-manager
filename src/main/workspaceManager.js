@@ -180,11 +180,18 @@ async function getLastCommit(worktreePath, git) {
 
 class WorkspaceManager {
   constructor(options = {}) {
+    this.configure(options);
+  }
+
+  configure(options = {}) {
     const home = homedir();
-    this.repoDir = resolve(options.repoDir ?? process.env.SCORZA_REPO_DIR ?? join(home, "dev/refsix/scorza"));
-    this.workspaceRoot = resolve(
-      options.workspaceRoot ?? process.env.SCORZA_WORKSPACE_ROOT ?? join(home, "dev/refsix/workspaces"),
-    );
+    const defaults = {
+      repoDir: join(home, "wtm", "repo"),
+      workspaceRoot: join(home, "wtm", "worktrees"),
+    };
+
+    this.repoDir = resolve(options.repoDir ?? defaults.repoDir);
+    this.workspaceRoot = resolve(options.workspaceRoot ?? defaults.workspaceRoot);
   }
 
   async ensureWorkspaceRoot() {

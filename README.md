@@ -1,9 +1,9 @@
 # WTM (WorkTree Manager)
 
 WTM (WorkTree Manager) is an Electron desktop dashboard for creating, inspecting,
-and pruning `git worktree` checkouts of the `~/dev/refsix/scorza` repository. It
-reimplements the behaviour of the existing `./scorza-manage` script with a
-graphical interface.
+and pruning `git worktree` checkouts for any git repository. It provides a
+compact, IDE-inspired view over multiple worktrees alongside built-in terminal
+tabs for common project commands.
 
 ## Features
 
@@ -22,8 +22,8 @@ graphical interface.
 ## Prerequisites
 
 - Node.js 18+ with npm.
-- `~/dev/refsix/scorza` must exist locally, with worktrees stored under
-  `~/dev/refsix/workspaces`.
+- A git repository to manage plus a directory where worktrees should be created.
+  These paths are configured via the settings file (see below).
 
 ## Install Dependencies
 
@@ -56,19 +56,38 @@ src/
 ├── main/
 │   ├── main.js           # Electron entry point + IPC wiring
 │   ├── preload.js        # Secure bridge exposing workspace APIs
+│   ├── settingsManager.js
 │   └── workspaceManager.js
-│                        # Git + worktree orchestration
+│                        # Git + worktree orchestration and settings IO
 └── renderer/
     ├── index.html        # Renderer shell markup
     ├── index.js          # Renderer logic calling preload bridge
     └── styles.css        # UI styling
 ```
 
+## Settings
+
+WTM stores its configuration in a simple JSON file so you can manage settings
+alongside the rest of your dotfiles. By default the app creates
+`~/.wtm/settings.json` on first launch with the following shape:
+
+```json
+{
+  "repoDir": "/absolute/path/to/your/repo",
+  "workspaceRoot": "/absolute/path/to/worktrees"
+}
+```
+
+Edit this file to point at your repository and worktree directory before
+launching the app. Both paths are resolved to absolute paths automatically.
+
+To use an alternative settings location (useful for scripting or tests), set
+the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
+
 ## Notes
 
-- Workspace creation mirrors `./scorza-manage`: it fetches remotes as needed and
-  defaults to branching from `origin/develop` when the target branch does not
-  exist.
+- Workspace creation fetches remotes as needed and defaults to branching from
+  `origin/develop` when the target branch does not exist.
 - Worktree removal is performed via `git worktree remove`. The UI asks for
   confirmation if uncommitted changes are present unless deletion is forced.
 - Use the **Refresh** button whenever worktrees change outside the app.
