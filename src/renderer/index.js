@@ -4,7 +4,7 @@ const ToastKind = {
   ERROR: "error",
 };
 
-const DEFAULT_TERMINALS = [
+const DEFAULT_QUICK_ACCESS = [
   {
     key: "npm-install",
     label: "npm i",
@@ -101,7 +101,9 @@ class WorkspaceApp {
     this.sessionMap = new Map();
     this.rowElements = new Map();
     this.unsubscribe = [];
-    this.defaultTerminals = DEFAULT_TERMINALS;
+    this.defaultTerminals = this.normaliseQuickAccessList(DEFAULT_QUICK_ACCESS, {
+      fallbackToDefault: true,
+    });
     this.hasRestoredWorkspaces = false;
     this.environments = [];
     this.activeEnvironmentName = "";
@@ -133,6 +135,126 @@ class WorkspaceApp {
       throw new Error(`Expected element with id '${id}'`);
     }
     return element;
+  }
+
+  slugify(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  normaliseQuickAccessList(list, options = {}) {
+    const { fallbackToDefault = false } = options;
+    const source = Array.isArray(list) ? list : [];
+    const normalized = [];
+    const seenKeys = new Set();
+
+    source.forEach((entry, index) => {
+      const normalizedEntry = this.normalizeQuickAccessEntry(entry, index);
+      if (!normalizedEntry) {
+        return;
+      }
+      let { key } = normalizedEntry;
+      let counter = 1;
+      while (seenKeys.has(key)) {
+        key = `${normalizedEntry.key}-${(counter += 1)}`;
+      }
+      seenKeys.add(key);
+      normalized.push({
+        key,
+        label: normalizedEntry.label,
+        quickCommand: normalizedEntry.quickCommand,
+      });
+    });
+
+    if (normalized.length === 0 && fallbackToDefault) {
+      return DEFAULT_QUICK_ACCESS.map((item) => ({ ...item }));
+    }
+
+    return normalized;
+  }
+
+  normalizeQuickAccessEntry(entry, index) {
+    if (!entry || (typeof entry !== "string" && typeof entry !== "object")) {
+      return null;
+    }
+
+    if (typeof entry === "string") {
+      const value = entry.trim();
+      if (!value) {
+        return null;
+      }
+      return {
+        key: this.slugify(value) || `slot-${index + 1}`,
+        label: value,
+        quickCommand: value,
+      };
+    }
+
+    const labelCandidate =
+      (typeof entry.label === "string" && entry.label.trim()) ||
+      (typeof entry.name === "string" && entry.name.trim()) ||
+      "";
+    const commandCandidate =
+      (typeof entry.quickCommand === "string" && entry.quickCommand.trim()) ||
+      (typeof entry.command === "string" && entry.command.trim()) ||
+      "";
+
+    if (!labelCandidate && !commandCandidate) {
+      return null;
+    }
+
+    const label = labelCandidate || commandCandidate || `Command ${index + 1}`;
+    const quickCommand = commandCandidate || label;
+    const keySource =
+      (typeof entry.key === "string" && entry.key.trim()) || label || `slot-${index + 1}`;
+
+    return {
+      key: this.slugify(keySource) || `slot-${index + 1}`,
+      label,
+      quickCommand,
+    };
+  }
+
+  generateEphemeralKey(workspaceState) {
+    const hasRandomUUID = typeof window.crypto?.randomUUID === "function";
+    let candidate = "";
+    let attempts = 0;
+    do {
+      if (hasRandomUUID) {
+        candidate = `custom-${window.crypto.randomUUID()}`;
+      } else {
+        const salt = Math.floor(Math.random() * 1e6 + attempts);
+        candidate = `custom-${Date.now().toString(36)}-${salt.toString(36)}`;
+      }
+      attempts += 1;
+    } while (workspaceState.terminals.has(candidate));
+    return candidate;
+  }
+
+  generateEphemeralLabel(workspaceState) {
+    const label = `Terminal ${workspaceState.ephemeralCounter}`;
+    workspaceState.ephemeralCounter += 1;
+    return label;
+  }
+
+  registerEphemeralLabel(workspaceState, label) {
+    if (!label) {
+      return;
+    }
+    const match = /([0-9]+)\s*$/.exec(label);
+    if (!match) {
+      return;
+    }
+    const value = Number.parseInt(match[1], 10);
+    if (Number.isFinite(value) && value + 1 > workspaceState.ephemeralCounter) {
+      workspaceState.ephemeralCounter = value + 1;
+    }
   }
 
   setupDeleteDialog() {
@@ -196,6 +318,10 @@ class WorkspaceApp {
           ? result.activeEnvironment
           : environments[0]?.name ?? "";
       this.activeEnvironmentName = active;
+      const hasQuickAccessConfig = Array.isArray(result?.quickAccess);
+      this.defaultTerminals = this.normaliseQuickAccessList(result?.quickAccess, {
+        fallbackToDefault: !hasQuickAccessConfig,
+      });
       this.renderEnvironmentOptions();
     } catch (error) {
       const message = this.normaliseError(error);
@@ -272,6 +398,10 @@ class WorkspaceApp {
       const active =
         typeof result?.activeEnvironment === "string" ? result.activeEnvironment : target;
       this.activeEnvironmentName = active;
+      const hasQuickAccessConfig = Array.isArray(result?.quickAccess);
+      this.defaultTerminals = this.normaliseQuickAccessList(result?.quickAccess, {
+        fallbackToDefault: !hasQuickAccessConfig,
+      });
       this.renderEnvironmentOptions({ preserveDisabled: true });
       this.toast.success(`Switched to ${this.activeEnvironmentName}`);
 
@@ -793,7 +923,7 @@ class WorkspaceApp {
 
     const placeholder = document.createElement("div");
     placeholder.className = "terminal-placeholder";
-    placeholder.textContent = "Select a quick action to launch a terminal.";
+    placeholder.textContent = "Select a quick action or use the + button to start a terminal.";
     terminalPanels.appendChild(placeholder);
 
     const savedStateRaw = options.savedState ?? (await this.terminalAPI.getWorkspaceState(workspace.path));
@@ -812,14 +942,47 @@ class WorkspaceApp {
       terminalDefs: new Map(),
       activeTerminalKey: null,
       savedState,
+      addTerminalButton: null,
+      ephemeralCounter: 1,
     };
 
     this.openWorkspaces.set(workspace.path, workspaceState);
     this.updateWorkspacePlaceholderVisibility();
 
-    this.defaultTerminals.forEach((terminalDef) => {
-      this.setupTerminalTab(workspaceState, terminalDef);
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "terminal-tab-add";
+    addButton.textContent = "+";
+    addButton.title = "New terminal";
+    addButton.setAttribute("aria-label", "New terminal");
+    addButton.addEventListener("click", () => {
+      this.handleAddTerminal(workspaceState);
     });
+    terminalTabs.appendChild(addButton);
+    workspaceState.addTerminalButton = addButton;
+
+    this.defaultTerminals.forEach((terminalDef) => {
+      this.setupTerminalTab(workspaceState, { ...terminalDef, isEphemeral: false });
+    });
+
+    const savedTerminals = (savedState?.terminals && typeof savedState.terminals === "object"
+      ? savedState.terminals
+      : {}) || {};
+    for (const [key, terminalState] of Object.entries(savedTerminals)) {
+      if (workspaceState.terminals.has(key)) {
+        continue;
+      }
+      const label =
+        typeof terminalState?.label === "string" && terminalState.label.trim()
+          ? terminalState.label.trim()
+          : this.generateEphemeralLabel(workspaceState);
+      this.setupTerminalTab(workspaceState, {
+        key,
+        label,
+        quickCommand: null,
+        isEphemeral: true,
+      });
+    }
 
     this.activateWorkspaceTab(workspace.path);
   }
@@ -840,24 +1003,52 @@ class WorkspaceApp {
   }
 
   setupTerminalTab(workspaceState, terminalDef) {
-    const tabButton = document.createElement("button");
-    tabButton.className = "terminal-tab";
-    tabButton.type = "button";
-    tabButton.textContent = terminalDef.label;
-    tabButton.title = terminalDef.label;
+    const tabElement = document.createElement("div");
+    tabElement.className = "terminal-tab";
+    tabElement.dataset.key = terminalDef.key;
+    tabElement.title = terminalDef.label;
 
-    tabButton.addEventListener("click", () => {
+    if (terminalDef.isEphemeral) {
+      tabElement.classList.add("is-ephemeral");
+    }
+
+    const triggerButton = document.createElement("button");
+    triggerButton.type = "button";
+    triggerButton.className = "terminal-tab-button";
+    triggerButton.textContent = terminalDef.label;
+    triggerButton.title = terminalDef.label;
+    triggerButton.addEventListener("click", () => {
       void this.handleTerminalTabClick(workspaceState, terminalDef.key);
     });
 
-    workspaceState.terminalTabs.appendChild(tabButton);
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "terminal-tab-close";
+    closeButton.setAttribute("aria-label", `Close ${terminalDef.label}`);
+    closeButton.textContent = "×";
+    closeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.handleTerminalClose(workspaceState, terminalDef.key);
+    });
+
+    tabElement.appendChild(triggerButton);
+    tabElement.appendChild(closeButton);
+
+    const insertionTarget = workspaceState.addTerminalButton;
+    if (insertionTarget && insertionTarget.parentElement === workspaceState.terminalTabs) {
+      workspaceState.terminalTabs.insertBefore(tabElement, insertionTarget);
+    } else {
+      workspaceState.terminalTabs.appendChild(tabElement);
+    }
 
     const savedTerminal = workspaceState.savedState?.terminals?.[terminalDef.key];
 
     const record = {
       key: terminalDef.key,
-      def: terminalDef,
-      tabButton,
+      def: { ...terminalDef },
+      tabButton: tabElement,
+      tabTrigger: triggerButton,
+      closeButton,
       panel: null,
       view: null,
       terminal: null,
@@ -869,13 +1060,123 @@ class WorkspaceApp {
       savedHistory: savedTerminal?.history ?? "",
       lastExitCode: savedTerminal?.lastExitCode ?? null,
       lastSignal: savedTerminal?.lastSignal ?? null,
+      isEphemeral: Boolean(terminalDef.isEphemeral),
+      ignoreSavedHistory: false,
     };
 
     workspaceState.terminals.set(terminalDef.key, record);
-    workspaceState.terminalDefs.set(terminalDef.key, terminalDef);
+    workspaceState.terminalDefs.set(terminalDef.key, record.def);
+
+    if (workspaceState.savedState && typeof workspaceState.savedState === "object") {
+      if (!workspaceState.savedState.terminals || typeof workspaceState.savedState.terminals !== "object") {
+        workspaceState.savedState.terminals = {};
+      }
+      if (!workspaceState.savedState.terminals[terminalDef.key]) {
+        workspaceState.savedState.terminals[terminalDef.key] = {};
+      }
+      workspaceState.savedState.terminals[terminalDef.key].label = terminalDef.label;
+    }
 
     if (record.lastExitCode !== null) {
-      tabButton.classList.add("is-exited");
+      tabElement.classList.add("is-exited");
+    }
+
+    if (record.isEphemeral) {
+      this.registerEphemeralLabel(workspaceState, terminalDef.label);
+    }
+
+    return record;
+  }
+
+  handleAddTerminal(workspaceState) {
+    if (!workspaceState) {
+      return;
+    }
+    const key = this.generateEphemeralKey(workspaceState);
+    const label = this.generateEphemeralLabel(workspaceState);
+    this.setupTerminalTab(workspaceState, {
+      key,
+      label,
+      quickCommand: null,
+      isEphemeral: true,
+    });
+    const record = workspaceState.terminals.get(key);
+    if (record) {
+      void this.handleTerminalTabClick(workspaceState, key);
+    }
+  }
+
+  findFallbackTerminalKey(workspaceState, excludeKey) {
+    for (const [key] of workspaceState.terminals.entries()) {
+      if (key === excludeKey) {
+        continue;
+      }
+      return key;
+    }
+    return null;
+  }
+
+  handleTerminalClose(workspaceState, terminalKey) {
+    if (!workspaceState) {
+      return;
+    }
+    const record = workspaceState.terminals.get(terminalKey);
+    if (!record) {
+      return;
+    }
+
+    const wasActive = workspaceState.activeTerminalKey === terminalKey;
+    const fallbackKey = wasActive ? this.findFallbackTerminalKey(workspaceState, terminalKey) : null;
+
+    record.resizeObserver?.disconnect();
+    if (record.terminal) {
+      record.terminal.dispose();
+    }
+
+    if (record.sessionId) {
+      this.sessionMap.delete(record.sessionId);
+      const preserve = !record.isEphemeral;
+      void this.terminalAPI
+        .dispose(record.sessionId, { preserve })
+        .catch((error) => console.warn("Failed to dispose terminal", error));
+      record.sessionId = null;
+    }
+
+    if (record.panel?.isConnected) {
+      record.panel.remove();
+    }
+
+    record.panel = null;
+    record.view = null;
+    record.terminal = null;
+    record.fitAddon = null;
+    record.resizeObserver = null;
+    record.closed = true;
+    record.savedHistory = "";
+    record.lastExitCode = null;
+    record.lastSignal = null;
+    record.ignoreSavedHistory = !record.isEphemeral;
+
+    if (record.tabButton) {
+      record.tabButton.classList.add("is-exited");
+      record.tabButton.classList.remove("is-active");
+    }
+
+    if (record.isEphemeral) {
+      record.tabButton?.remove();
+      workspaceState.terminals.delete(terminalKey);
+      workspaceState.terminalDefs.delete(terminalKey);
+      if (workspaceState.savedState?.terminals && typeof workspaceState.savedState.terminals === "object") {
+        delete workspaceState.savedState.terminals[terminalKey];
+      }
+    }
+
+    if (wasActive) {
+      if (fallbackKey && workspaceState.terminals.has(fallbackKey)) {
+        this.setActiveTerminal(workspaceState, fallbackKey);
+      } else {
+        this.setActiveTerminal(workspaceState, null);
+      }
     }
   }
 
@@ -975,6 +1276,7 @@ class WorkspaceApp {
         slot: record.key,
         cols: terminal.cols,
         rows: terminal.rows,
+        label: record.def.label,
       });
     } catch (error) {
       console.error("Failed to create terminal session", error);
@@ -1007,19 +1309,21 @@ class WorkspaceApp {
     record.resizeObserver = resizeObserver;
     record.closed = false;
     record.quickCommandExecuted = record.quickCommandExecuted || Boolean(sessionInfo.quickCommandExecuted);
-    record.lastExitCode = sessionInfo.lastExitCode ?? record.lastExitCode ?? null;
-    record.lastSignal = sessionInfo.lastSignal ?? record.lastSignal ?? null;
+    record.lastExitCode = sessionInfo.lastExitCode ?? null;
+    record.lastSignal = sessionInfo.lastSignal ?? null;
 
-    const history = record.savedHistory || sessionInfo.history || "";
+    const shouldRestoreHistory = !record.ignoreSavedHistory;
+    const history = shouldRestoreHistory ? record.savedHistory || sessionInfo.history || "" : "";
     if (history) {
       terminal.write(history);
     }
+    record.ignoreSavedHistory = false;
     record.savedHistory = "";
 
     if (record.lastExitCode !== null) {
-      record.tabButton.classList.add("is-exited");
+      record.tabButton?.classList.add("is-exited");
     } else {
-      record.tabButton.classList.remove("is-exited");
+      record.tabButton?.classList.remove("is-exited");
     }
 
     this.sessionMap.set(sessionInfo.sessionId, record);
@@ -1043,6 +1347,8 @@ class WorkspaceApp {
           console.warn("Failed to dispose terminal", error);
         });
       }
+      record.tabButton?.remove();
+      record.panel?.remove();
     });
     if (!preserveState) {
       void this.terminalAPI
@@ -1098,14 +1404,16 @@ class WorkspaceApp {
       return;
     }
     record.closed = true;
-    record.tabButton.classList.add("is-exited");
+    record.tabButton?.classList.add("is-exited");
     record.lastExitCode = payload.exitCode ?? null;
     record.lastSignal = payload.signal ?? null;
     const exitCode = payload.exitCode ?? 0;
     const signal = payload.signal ? ` (signal ${payload.signal})` : "";
-    record.terminal.write(
-      `\r\n\x1b[38;5;110mProcess exited with code ${exitCode}${signal}\x1b[0m\r\n`,
-    );
+    if (record.terminal) {
+      record.terminal.write(
+        `\r\n\x1b[38;5;110mProcess exited with code ${exitCode}${signal}\x1b[0m\r\n`,
+      );
+    }
   }
 
   handleWindowResize() {

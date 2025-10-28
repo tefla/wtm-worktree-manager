@@ -79,7 +79,15 @@ alongside the rest of your dotfiles. By default the app creates
       "workspaceRoot": "/absolute/path/to/worktrees"
     }
   },
-  "activeEnvironment": "default"
+  "activeEnvironment": "default",
+  "quickAccess": [
+    { "key": "npm-install", "label": "npm i", "quickCommand": "npm i" },
+    {
+      "key": "lerna-bootstrap",
+      "label": "npm run lerna:bootstrap",
+      "quickCommand": "npm run lerna:bootstrap"
+    }
+  ]
 }
 ```
 
@@ -88,6 +96,12 @@ with multiple repositories. The app exposes a dropdown in the header that lets
 you switch between the configured environments at runtime. The
 `activeEnvironment` key selects which environment is used when the app starts.
 All paths are resolved to absolute locations automatically.
+
+Use the `quickAccess` array to configure the pre-defined terminal tabs that
+appear for each workspace. Each entry accepts a unique `key`, a human-friendly
+`label`, and the `quickCommand` to execute when the terminal is opened for the
+first time. Provide an empty array to disable the presets entirely and rely on
+the new “+” button to launch ad-hoc terminals.
 
 To use an alternative settings location (useful for scripting or tests), set
 the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
@@ -99,5 +113,7 @@ the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
 - Worktree removal is performed via `git worktree remove`. The UI asks for
   confirmation if uncommitted changes are present unless deletion is forced.
 - Use the **Refresh** button whenever worktrees change outside the app.
+- Terminal tabs can now be closed individually. Preset tabs remain available
+  (turning red when stopped) while ad-hoc tabs disappear once closed.
 
 Happy hacking! ♟️

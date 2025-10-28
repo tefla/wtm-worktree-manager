@@ -73,6 +73,7 @@ class TerminalSessionStore {
           lastSignal: typeof signalRaw === "string" ? signalRaw : signalRaw ?? null,
           updatedAt:
             typeof updatedAtRaw === "number" && Number.isFinite(updatedAtRaw) ? updatedAtRaw : Date.now(),
+          label: typeof terminalState.label === "string" ? terminalState.label : null,
         };
       }
       normalised[resolvedPath] = {
@@ -123,7 +124,7 @@ class TerminalSessionStore {
     return data.workspaces[key];
   }
 
-  async ensureTerminal(workspacePath, slot) {
+  async ensureTerminal(workspacePath, slot, metadata = {}) {
     const workspace = await this.ensureWorkspace(workspacePath);
     if (!workspace.terminals[slot]) {
       workspace.terminals[slot] = {
@@ -132,11 +133,23 @@ class TerminalSessionStore {
         lastExitCode: null,
         lastSignal: null,
         updatedAt: Date.now(),
+        label: null,
       };
       workspace.updatedAt = Date.now();
       this.scheduleSave();
     }
-    return workspace.terminals[slot];
+    const terminal = workspace.terminals[slot];
+    if (metadata && typeof metadata === "object") {
+      if (typeof metadata.label === "string") {
+        const trimmed = metadata.label.trim();
+        if (trimmed && terminal.label !== trimmed) {
+          terminal.label = trimmed;
+          terminal.updatedAt = Date.now();
+          this.scheduleSave();
+        }
+      }
+    }
+    return terminal;
   }
 
   async setActiveTerminal(workspacePath, slot) {
