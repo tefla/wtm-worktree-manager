@@ -1,6 +1,18 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { AppHeader } from "./components/AppHeader";
+import { CreateWorkspaceForm } from "./components/CreateWorkspaceForm";
+import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
+import type {
+  TerminalDefinition,
+  SavedTerminalState,
+  SavedWorkspaceState,
+  TerminalRecord,
+  WorkspaceTabState,
+} from "./stateTypes";
+import { cx } from "./utils/cx";
 import type {
   EnsureTerminalResponse,
   QuickAccessEntry,
@@ -17,51 +29,6 @@ interface Toast {
   id: number;
   kind: ToastKind;
   message: string;
-}
-
-interface TerminalDefinition {
-  key: string;
-  label: string;
-  quickCommand: string | null;
-  isEphemeral: boolean;
-}
-
-interface SavedTerminalState {
-  history?: string;
-  quickCommandExecuted?: boolean;
-  lastExitCode?: number | null;
-  lastSignal?: string | null;
-  label?: string | null;
-}
-
-interface SavedWorkspaceState {
-  workspacePath: string;
-  activeTerminal: string | null;
-  terminals: Record<string, SavedTerminalState>;
-}
-
-interface TerminalRecord {
-  key: string;
-  label: string;
-  quickCommand: string | null;
-  isEphemeral: boolean;
-  sessionId: string | null;
-  quickCommandExecuted: boolean;
-  lastExitCode: number | null;
-  lastSignal: string | null;
-  savedHistory: string;
-  ignoreSavedHistory: boolean;
-  closed: boolean;
-  shouldStart: boolean;
-}
-
-interface WorkspaceTabState {
-  workspace: WorkspaceSummary;
-  terminalOrder: string[];
-  terminals: Map<string, TerminalRecord>;
-  activeTerminalKey: string | null;
-  savedState: SavedWorkspaceState;
-  ephemeralCounter: number;
 }
 
 interface SessionIndexEntry {
@@ -84,23 +51,6 @@ const TERMINAL_THEME = {
   cursor: "#38bdf8",
   selectionBackground: "#1e293b",
 };
-
-function cx(...values: Array<string | null | undefined | false | Record<string, boolean>>): string {
-  const classes: string[] = [];
-  for (const value of values) {
-    if (!value) continue;
-    if (typeof value === "string") {
-      classes.push(value);
-      continue;
-    }
-    for (const [key, active] of Object.entries(value)) {
-      if (active) {
-        classes.push(key);
-      }
-    }
-  }
-  return classes.join(" ").trim();
-}
 
 function slugify(value: string): string {
   return value
@@ -152,80 +102,6 @@ function normaliseQuickAccessList(list: unknown, options: { fallbackToDefault?: 
   return normalized;
 }
 
-function buildStatusTooltip(status: WorkspaceSummary["status"]): string {
-  if (!status) {
-    return "Status unavailable";
-  }
-
-  const lines: string[] = [];
-  const changeCount = status.changeCount ?? 0;
-
-  if (status.clean) {
-    const cleanLabel =
-      status.summary && status.summary.trim().toLowerCase() !== "clean"
-        ? status.summary.trim()
-        : "Clean working tree";
-    lines.push(cleanLabel);
-  } else if (changeCount > 0) {
-    lines.push(`${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`);
-  } else if (status.summary) {
-    lines.push(status.summary.trim());
-  }
-
-  if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
-    lines.push(...status.sampleChanges.slice(0, 5).map((line) => line.trim()));
-  }
-
-  const filtered = lines
-    .map((line) => (typeof line === "string" ? line.trim() : ""))
-    .filter((line, index, arr) => line && arr.indexOf(line) === index);
-
-  if (filtered.length === 0) {
-    filtered.push("Status unavailable");
-  }
-
-  return filtered.join("\n");
-}
-
-function buildStatusIcons(workspace: WorkspaceSummary): Array<{ className: string; text: string; tooltip: string }> {
-  const status = workspace.status;
-  if (workspace.kind === "folder") {
-    return [{ className: "status-icon folder", text: "📁", tooltip: "Folder not linked to a git worktree" }];
-  }
-
-  const tooltip = buildStatusTooltip(status);
-  const icons: Array<{ className: string; text: string; tooltip: string }> = [];
-  if (status.clean) {
-    icons.push({ className: "status-icon clean", text: "✔", tooltip });
-  } else {
-    const changeCount = status.changeCount ?? 0;
-    const warningText = changeCount > 0 ? `⚠${String(changeCount)}` : "⚠";
-    icons.push({ className: "status-icon dirty", text: warningText, tooltip });
-  }
-
-  if (status.ahead) {
-    icons.push({
-      className: "status-icon ahead",
-      text: `↑${status.ahead}`,
-      tooltip: `Ahead by ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`,
-    });
-  }
-
-  if (status.behind) {
-    icons.push({
-      className: "status-icon behind",
-      text: `↓${status.behind}`,
-      tooltip: `Behind by ${status.behind} commit${status.behind === 1 ? "" : "s"}`,
-    });
-  }
-
-  if (icons.length === 0) {
-    icons.push({ className: "status-icon", text: "•", tooltip: "No status information" });
-  }
-
-  return icons;
-}
-
 function runtimeKey(workspacePath: string, terminalKey: string): string {
   return `${workspacePath}::${terminalKey}`;
 }
@@ -241,87 +117,6 @@ function ensureSavedWorkspaceState(workspacePath: string, saved?: WorkspaceState
     terminals: { ...terminals },
   };
 }
-
-function buildWorkspaceDetailTooltip(workspace: WorkspaceSummary): string {
-  const status = workspace.status;
-  const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
-  const lines: string[] = [
-    `Branch: ${branchLabel}`,
-    `Worktree: ${workspace.relativePath || "—"}`,
-    `Path: ${workspace.path}`,
-    `HEAD: ${workspace.headSha || "—"}`,
-    status.upstream ? `Upstream: ${status.upstream}` : "Upstream: —",
-    `Status: ${status.summary}`,
-  ];
-
-  if (!status.clean && status.changeCount) {
-    lines.push(`${status.changeCount} uncommitted change${status.changeCount === 1 ? "" : "s"}`);
-  }
-
-  if (workspace.lastCommit) {
-    lines.push(
-      `Last commit: ${workspace.lastCommit.shortSha} ${workspace.lastCommit.relativeTime} — ${workspace.lastCommit.subject}`,
-    );
-  }
-
-  if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
-    lines.push("Changes:");
-    status.sampleChanges.slice(0, 5).forEach((change) => {
-      lines.push(` • ${change}`);
-    });
-  }
-
-  return lines.join("\n");
-}
-
-function useStableCallback<T extends (...args: any[]) => any>(callback: T): T {
-  const ref = useRef<T>(callback);
-  ref.current = callback;
-  return useCallback(((...args: Parameters<T>) => ref.current(...args)) as T, []);
-}
-
-const TerminalPlaceholder: React.FC = () => (
-  <div className="terminal-placeholder">
-    Select a quick action or use the + button to start a terminal.
-  </div>
-);
-
-interface TerminalPanelProps {
-  workspacePath: string;
-  record: TerminalRecord;
-  isActive: boolean;
-  onStart: (workspacePath: string, record: TerminalRecord, container: HTMLDivElement) => void;
-  onDispose: (workspacePath: string, record: TerminalRecord) => void;
-}
-
-const TerminalPanel: React.FC<TerminalPanelProps> = ({ workspacePath, record, isActive, onStart, onDispose }) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const onStartStable = useStableCallback(onStart);
-  const onDisposeStable = useStableCallback(onDispose);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    if (record.shouldStart || record.sessionId) {
-      onStartStable(workspacePath, record, container);
-    }
-  }, [record, workspacePath, onStartStable, record.shouldStart, record.sessionId]);
-
-  useEffect(
-    () => () => {
-      onDisposeStable(workspacePath, record);
-    },
-    [workspacePath, record, onDisposeStable],
-  );
-
-  return (
-    <div className={cx("terminal-panel", { "is-active": isActive })} data-key={record.key}>
-      <div ref={containerRef} className="terminal-view" />
-    </div>
-  );
-};
 
 function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
@@ -487,7 +282,7 @@ function App(): JSX.Element {
   );
 
   const disposeTerminalRuntime = useCallback(
-    (workspacePath: string, record: TerminalRecord, preserveSession: boolean) => {
+    (workspacePath: string, record: TerminalRecord, preserveSession = false) => {
       const key = runtimeKey(workspacePath, record.key);
       const runtime = runtimeRef.current.get(key);
       if (runtime) {
@@ -662,6 +457,30 @@ function App(): JSX.Element {
     [pushToast],
   );
 
+  const handleTerminalStart = useCallback(
+    (workspacePath: string, record: TerminalRecord, container: HTMLDivElement) => {
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) {
+        return;
+      }
+      void startTerminalSession(workspaceState, record, container);
+    },
+    [startTerminalSession],
+  );
+
+  const handleTerminalDispose = useCallback(
+    (workspacePath: string, record: TerminalRecord) => {
+      const workspaceState = workspaceTabsRef.current.get(workspacePath);
+      if (!workspaceState) {
+        return;
+      }
+      if (!workspaceState.terminals.has(record.key)) {
+        disposeTerminalRuntime(workspacePath, record, !record.isEphemeral);
+      }
+    },
+    [disposeTerminalRuntime],
+  );
+
   const handleTerminalTabClick = useCallback(
     (workspacePath: string, terminalKey: string) => {
       const workspaceState = workspaceTabsRef.current.get(workspacePath);
@@ -773,6 +592,17 @@ function App(): JSX.Element {
       }
     },
     [ensureWorkspaceTab, setActiveTerminal],
+  );
+
+  const handleWorkspaceTabSelect = useCallback(
+    (workspacePath: string) => {
+      setActiveWorkspacePath(workspacePath);
+      const state = workspaceTabsRef.current.get(workspacePath);
+      if (state && state.activeTerminalKey) {
+        setActiveTerminal(state, state.activeTerminalKey);
+      }
+    },
+    [setActiveTerminal],
   );
 
   const closeWorkspace = useCallback(
@@ -1068,309 +898,49 @@ function App(): JSX.Element {
     [workspaces],
   );
 
-  const activeWorkspaceState = activeWorkspacePath
-    ? workspaceTabsRef.current.get(activeWorkspacePath) ?? null
-    : null;
-
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div className="header-text">
-          <h1>WTM (WorkTree Manager)</h1>
-          <p>Manage git worktrees for your project repositories</p>
-        </div>
-        <div className="header-actions">
-          <label className="environment-switcher">
-            <span>Environment</span>
-            <select
-              id="environment-select"
-              name="environment"
-              value={activeEnvironment}
-              onChange={(event) => handleEnvironmentChange(event.target.value)}
-            >
-              {Object.entries(environments).map(([name]) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            id="refresh-button"
-            className="accent-button"
-            type="button"
-            onClick={handleRefreshAll}
-            disabled={refreshing}
-          >
-            {refreshing ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-      </header>
+      <AppHeader
+        title="WTM (WorkTree Manager)"
+        subtitle="Manage git worktrees for your project repositories"
+        environments={environments}
+        activeEnvironment={activeEnvironment}
+        refreshing={refreshing}
+        onEnvironmentChange={handleEnvironmentChange}
+        onRefreshAll={handleRefreshAll}
+      />
 
-      <section className="create-section">
-        <form id="create-form" autoComplete="off" onSubmit={handleCreateWorkspace}>
-          <label className="field">
-            <span>Branch or ticket name</span>
-            <input
-              id="branch-input"
-              name="branch"
-              type="text"
-              placeholder="PROJ-1234-awesome-feature"
-              value={branchInput}
-              onChange={(event) => setBranchInput(event.target.value)}
-              required
-              disabled={createInFlight}
-            />
-          </label>
-          <label className="field optional">
-            <span>Base ref (optional)</span>
-            <input
-              id="base-input"
-              name="base"
-              type="text"
-              placeholder="origin/develop"
-              value={baseInput}
-              onChange={(event) => setBaseInput(event.target.value)}
-              disabled={createInFlight}
-            />
-          </label>
-          <button id="create-button" className="primary-button" type="submit" disabled={createInFlight}>
-            {createInFlight ? "Creating…" : "Create Workspace"}
-          </button>
-        </form>
-        <p className="hint">
-          New worktrees are created alongside your configured workspace root. Branch names are converted to folder
-          friendly paths automatically.
-        </p>
-      </section>
+      <CreateWorkspaceForm
+        branchInput={branchInput}
+        baseInput={baseInput}
+        createInFlight={createInFlight}
+        onBranchChange={setBranchInput}
+        onBaseChange={setBaseInput}
+        onSubmit={handleCreateWorkspace}
+      />
 
       <main className="content-shell">
-        <aside className="workspace-sidebar">
-          <header className="workspace-sidebar-header">
-            <h2>Workspaces</h2>
-            <span>{loadingWorkspaces ? "Loading…" : `${workspaceList.length} found`}</span>
-          </header>
-          <div id="workspace-list" className="workspace-list">
-            {loadingWorkspaces ? (
-              <div className="empty-state">Loading workspaces…</div>
-            ) : workspaceList.length === 0 ? (
-              <div className="empty-state">No worktrees found. Create one to get started.</div>
-            ) : (
-              workspaceList.map((workspace) => {
-                const isSelected = workspace.path === activeWorkspacePath;
-                const statusIcons = buildStatusIcons(workspace);
-                const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
-                return (
-                  <div
-                    key={workspace.path}
-                    className={cx("workspace-row", workspace.kind, { "is-active": isSelected })}
-                    data-path={workspace.path}
-                    title={buildStatusTooltip(workspace.status)}
-                    onClick={(event) => {
-                      const target = event.target as HTMLElement;
-                      if (target.closest("button")) {
-                        return;
-                      }
-                      void handleWorkspaceSelect(workspace);
-                    }}
-                  >
-                    <div className="workspace-primary">
-                      <span className="workspace-marker" />
-                      <span className="workspace-name">{branchLabel}</span>
-                    </div>
-                    <div className="workspace-icons">
-                      {statusIcons.map((icon, index) => (
-                        <span key={`${icon.text}-${index}`} className={icon.className} title={icon.tooltip}>
-                          {icon.text}
-                        </span>
-                      ))}
-                    </div>
-                    {workspace.kind === "worktree" && (
-                      <div className="workspace-row-actions">
-                        <button
-                          className="row-icon-button"
-                          type="button"
-                          aria-label="Rescan workspace"
-                          title="Rescan workspace"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleRefreshWorkspace(workspace);
-                          }}
-                        >
-                          ⟳
-                        </button>
-                        <button
-                          className="row-icon-button danger"
-                          type="button"
-                          aria-label="Delete workspace"
-                          title="Delete workspace"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleDeleteWorkspace(workspace);
-                          }}
-                        >
-                          ✖
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </aside>
-
-        <section id="workspace-tabs" className={cx("workspace-detail", { "is-empty": !activeWorkspaceState })}>
-          <div className="workspace-tab-bar">
-            {workspaceOrder.map((path) => {
-              const state = workspaceTabsRef.current.get(path);
-              if (!state) return null;
-              const label = state.workspace.branch || state.workspace.relativePath || state.workspace.path;
-              return (
-                <button
-                  key={path}
-                  type="button"
-                  className={cx("workspace-tab", { "is-active": activeWorkspacePath === path })}
-                  onClick={() => setActiveWorkspacePath(path)}
-                  title={`${label}\n${state.workspace.path}`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="workspace-tab-panels">
-            {!activeWorkspaceState ? (
-              <div id="workspace-detail-placeholder" className="detail-placeholder">
-                <h2>Workspace Details</h2>
-                <p>Select a workspace from the list to open terminals and quick commands.</p>
-              </div>
-            ) : (
-              workspaceOrder.map((path) => {
-                const state = workspaceTabsRef.current.get(path);
-                if (!state) return null;
-                const isActive = path === activeWorkspacePath;
-                const workspace = state.workspace;
-                return (
-                  <div
-                    key={path}
-                    className={cx("workspace-panel", { "is-active": isActive })}
-                    data-path={workspace.path}
-                  >
-                    <header className="workspace-detail-header">
-                      <div className="workspace-heading">
-                        <div className="workspace-title-row">
-                          <h2>{workspace.branch ?? workspace.relativePath ?? workspace.path}</h2>
-                          <span
-                            className="workspace-info-badge"
-                            title={buildWorkspaceDetailTooltip(workspace)}
-                            aria-label="Workspace status details"
-                          >
-                            ⓘ
-                          </span>
-                        </div>
-                        <p className="workspace-path">{workspace.path}</p>
-                      </div>
-                      <div className="workspace-detail-actions">
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          onClick={() => void handleRefreshWorkspace(workspace)}
-                        >
-                          Refresh
-                        </button>
-                        <button
-                          className="danger-button"
-                          type="button"
-                          onClick={() => void handleDeleteWorkspace(workspace)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </header>
-
-                    <div className="terminal-tabs">
-                      {state.terminalOrder.map((key) => {
-                        const record = state.terminals.get(key);
-                        if (!record) return null;
-                        const active = state.activeTerminalKey === key;
-                        return (
-                          <div
-                            key={key}
-                            className={cx("terminal-tab", {
-                              "is-active": active,
-                              "is-exited": record.closed && !record.isEphemeral,
-                              "is-ephemeral": record.isEphemeral,
-                            })}
-                            data-key={key}
-                          >
-                            <button
-                              type="button"
-                              className="terminal-tab-button"
-                              onClick={() => handleTerminalTabClick(state.workspace.path, key)}
-                            >
-                              {record.label}
-                            </button>
-                            <button
-                              type="button"
-                              className="terminal-tab-close"
-                              aria-label={`Close ${record.label}`}
-                              onClick={() => handleTerminalClose(state.workspace.path, key)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        );
-                      })}
-                      <button
-                        type="button"
-                        className="terminal-tab-add"
-                        onClick={() => handleAddTerminal(state.workspace.path)}
-                        aria-label="New terminal"
-                        title="New terminal"
-                      >
-                        +
-                      </button>
-                    </div>
-
-                    <div className="terminal-panels">
-                      {state.activeTerminalKey
-                        ? state.terminalOrder.map((key) => {
-                            const record = state.terminals.get(key);
-                            if (!record) return null;
-                            const tabActive = state.activeTerminalKey === key;
-                            return (
-                              <TerminalPanel
-                                key={key}
-                                workspacePath={state.workspace.path}
-                                record={record}
-                                isActive={tabActive}
-                                onStart={(workspacePath, targetRecord, container) => {
-                                  const workspaceState = workspaceTabsRef.current.get(workspacePath);
-                                  if (!workspaceState) return;
-                                  void startTerminalSession(workspaceState, targetRecord, container);
-                                }}
-                                onDispose={(workspacePath, targetRecord) => {
-                                  const workspaceState = workspaceTabsRef.current.get(workspacePath);
-                                  if (!workspaceState) return;
-                                  if (!workspaceState.terminals.has(targetRecord.key)) {
-                                    disposeTerminalRuntime(workspacePath, targetRecord, !targetRecord.isEphemeral);
-                                  }
-                                }}
-                              />
-                            );
-                          })
-                        : (
-                          <TerminalPlaceholder />
-                          )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
+        <WorkspaceSidebar
+          loading={loadingWorkspaces}
+          workspaces={workspaceList}
+          activeWorkspacePath={activeWorkspacePath}
+          onSelect={handleWorkspaceSelect}
+          onRefreshWorkspace={handleRefreshWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
+        />
+        <WorkspaceTabsPanel
+          workspaceOrder={workspaceOrder}
+          workspaceTabs={workspaceTabsRef.current}
+          activeWorkspacePath={activeWorkspacePath}
+          onSelectWorkspace={handleWorkspaceTabSelect}
+          onRefreshWorkspace={handleRefreshWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
+          onAddTerminal={handleAddTerminal}
+          onTerminalTabClick={handleTerminalTabClick}
+          onTerminalClose={handleTerminalClose}
+          onTerminalStart={handleTerminalStart}
+          onTerminalDispose={handleTerminalDispose}
+        />
       </main>
 
       <div id="toast-container" className="toast-container">
