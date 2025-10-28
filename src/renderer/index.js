@@ -91,6 +91,7 @@ class WorkspaceApp {
     this.tabBar = this.requireElement("workspace-tab-bar");
     this.tabPanels = this.requireElement("workspace-tab-panels");
     this.placeholderEl = this.requireElement("workspace-detail-placeholder");
+    this.deleteDialog = this.setupDeleteDialog();
 
     this.workspaces = [];
     this.isRefreshing = false;
@@ -131,6 +132,30 @@ class WorkspaceApp {
       throw new Error(`Expected element with id '${id}'`);
     }
     return element;
+  }
+
+  setupDeleteDialog() {
+    const overlay = this.requireElement("delete-dialog-overlay");
+    const panel = this.requireElement("delete-dialog-panel");
+    const title = this.requireElement("delete-dialog-title");
+    const message = this.requireElement("delete-dialog-message");
+    const warning = this.requireElement("delete-dialog-warning");
+    const summary = this.requireElement("delete-dialog-summary");
+    const confirmButton = this.requireElement("delete-dialog-confirm");
+    const cancelButton = this.requireElement("delete-dialog-cancel");
+    const backdrop = this.requireElement("delete-dialog-backdrop");
+
+    return {
+      overlay,
+      panel,
+      title,
+      message,
+      warning,
+      summary,
+      confirmButton,
+      cancelButton,
+      backdrop,
+    };
   }
 
   setupEventListeners() {
@@ -351,20 +376,141 @@ class WorkspaceApp {
     }
   }
 
+  showDeleteDialog(workspace) {
+    const status = workspace.status ?? { clean: true, changeCount: 0, summary: "" };
+    const {
+      overlay,
+      panel,
+      title,
+      message,
+      warning,
+      summary,
+      confirmButton,
+      cancelButton,
+      backdrop,
+    } = this.deleteDialog;
+
+    const branchLabel = workspace.branch || workspace.relativePath || workspace.path;
+    const isFolder = workspace.kind === "folder";
+    const changeCount = status.changeCount ?? 0;
+    const changeLabel = `${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    title.textContent = isFolder
+      ? `Remove folder "${branchLabel}"?`
+      : `Remove workspace "${branchLabel}"?`;
+    message.textContent = isFolder
+      ? "The folder will be removed from the workspace directory."
+      : "This action detaches the worktree and removes the folder from disk.";
+
+    if (!status.clean) {
+      warning.textContent = `${changeLabel} will be lost.`;
+      warning.classList.remove("is-hidden");
+    } else {
+      warning.textContent = "";
+      warning.classList.add("is-hidden");
+    }
+
+    const details = [];
+    if (workspace.branch) {
+      details.push(`Branch: ${workspace.branch}`);
+    } else if (!isFolder) {
+      details.push("Branch: Detached HEAD");
+    }
+    if (workspace.relativePath) {
+      details.push(`Folder: ${workspace.relativePath}`);
+    }
+    details.push(`Path: ${workspace.path}`);
+    if (workspace.headSha) {
+      details.push(`HEAD: ${workspace.headSha}`);
+    }
+    if (workspace.lastCommit) {
+      details.push(
+        `Last commit: ${workspace.lastCommit.shortSha} — ${workspace.lastCommit.subject}`,
+      );
+    }
+    if (!status.clean) {
+      details.push(changeLabel);
+    }
+
+    const summaryItems = details
+      .map((line) => `<li>${escapeHtml(line)}</li>`)
+      .join("");
+
+    let changeSamples = "";
+    if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
+      const samples = status.sampleChanges
+        .slice(0, 5)
+        .map((line) => `<li>${escapeHtml(line)}</li>`)
+        .join("");
+      changeSamples = `<li>${escapeHtml("Recent changes:")}<ul class="dialog-sublist">${samples}</ul></li>`;
+    }
+
+    summary.innerHTML = summaryItems + changeSamples;
+
+    const confirmLabel = !status.clean && !isFolder ? "Delete and discard changes" : "Delete workspace";
+    confirmButton.textContent = isFolder ? "Delete folder" : confirmLabel;
+
+    overlay.classList.remove("is-hidden");
+    overlay.setAttribute("aria-hidden", "false");
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (confirmed) => {
+        if (settled) return;
+        settled = true;
+        overlay.classList.add("is-hidden");
+        overlay.setAttribute("aria-hidden", "true");
+        confirmButton.removeEventListener("click", onConfirm);
+        cancelButton.removeEventListener("click", onCancel);
+        backdrop.removeEventListener("click", onBackdrop);
+        document.removeEventListener("keydown", onKeydown);
+        const isDisabled = Boolean(
+          previousFocus &&
+            typeof previousFocus === "object" &&
+            "disabled" in previousFocus &&
+            previousFocus.disabled,
+        );
+        if (previousFocus && typeof previousFocus.focus === "function" && !isDisabled) {
+          previousFocus.focus();
+        } else if (panel && typeof panel.blur === "function") {
+          panel.blur();
+        }
+        resolve(confirmed);
+      };
+
+      const onConfirm = () => finish(true);
+      const onCancel = () => finish(false);
+      const onBackdrop = (event) => {
+        event.preventDefault();
+        finish(false);
+      };
+      const onKeydown = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          finish(false);
+        }
+      };
+
+      confirmButton.addEventListener("click", onConfirm);
+      cancelButton.addEventListener("click", onCancel);
+      backdrop.addEventListener("click", onBackdrop);
+      document.addEventListener("keydown", onKeydown);
+
+      queueMicrotask(() => {
+        confirmButton.focus();
+      });
+    });
+  }
+
   async handleDelete(path) {
     const workspace = this.workspaces.find((item) => item.path === path);
-    if (!workspace) return;
+    if (!workspace || workspace.kind === "folder") return;
 
-    let force = false;
-    if (!workspace.status.clean) {
-      const confirmMessage =
-        `${workspace.branch} has ${workspace.status.changeCount} uncommitted change` +
-        (workspace.status.changeCount === 1 ? "." : "s.") +
-        "\nDeleting the workspace will discard them. Continue?";
-      const confirmed = window.confirm(confirmMessage);
-      if (!confirmed) return;
-      force = true;
-    }
+    const confirmed = await this.showDeleteDialog(workspace);
+    if (!confirmed) return;
+
+    const force = !workspace.status.clean;
 
     try {
       const result = await this.workspaceAPI.delete({ path, force });
@@ -880,26 +1026,56 @@ class WorkspaceApp {
     openPaths.forEach((path) => this.closeWorkspaceTab(path, { silent: true }));
   }
 
+  buildStatusTooltip(status) {
+    if (!status) {
+      return "Status unavailable";
+    }
+
+    const lines = [];
+    const changeCount = status.changeCount ?? 0;
+
+    if (status.clean) {
+      const cleanLabel =
+        status.summary && status.summary.trim().toLowerCase() !== "clean"
+          ? status.summary.trim()
+          : "Clean working tree";
+      lines.push(cleanLabel);
+    } else if (changeCount > 0) {
+      lines.push(`${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`);
+    } else if (status.summary) {
+      lines.push(status.summary.trim());
+    }
+
+    if (!status.clean && Array.isArray(status.sampleChanges) && status.sampleChanges.length > 0) {
+      lines.push(...status.sampleChanges.slice(0, 5).map((line) => line.trim()));
+    }
+
+    const filtered = lines
+      .map((line) => (typeof line === "string" ? line.trim() : ""))
+      .filter((line, index, arr) => line && arr.indexOf(line) === index);
+
+    if (filtered.length === 0) {
+      filtered.push("Status unavailable");
+    }
+
+    return filtered.map((line) => escapeHtml(line)).join("&#10;");
+  }
+
   buildStatusIcons(workspace) {
     const status = workspace.status;
     if (workspace.kind === "folder") {
       return '<span class="status-icon folder" title="Folder not linked to a git worktree">📁</span>';
     }
 
+    const tooltip = this.buildStatusTooltip(status);
     const icons = [];
     if (status.clean) {
-      icons.push('<span class="status-icon clean" title="Clean working tree">✔</span>');
+      icons.push(`<span class="status-icon clean" title="${tooltip}">✔</span>`);
     } else {
       const changeCount = status.changeCount ?? 0;
-      const changeLabel =
-        changeCount > 0
-          ? `${changeCount} uncommitted change${changeCount === 1 ? "" : "s"}`
-          : status.summary;
       const warningText =
         changeCount > 0 ? `⚠${escapeHtml(String(changeCount))}` : "⚠";
-      icons.push(
-        `<span class="status-icon dirty" title="${escapeHtml(changeLabel)}">${warningText}</span>`,
-      );
+      icons.push(`<span class="status-icon dirty" title="${tooltip}">${warningText}</span>`);
     }
 
     if (status.ahead) {

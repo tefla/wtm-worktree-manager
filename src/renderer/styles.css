@@ -699,6 +699,92 @@ code {
   font-size: 0.85rem;
 }
 
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 950;
+}
+
+.dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 10, 24, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-panel {
+  position: relative;
+  width: min(420px, calc(100% - 32px));
+  max-width: 420px;
+  border-radius: 10px;
+  border: 1px solid rgba(71, 85, 105, 0.45);
+  background: linear-gradient(145deg, rgba(9, 17, 32, 0.96), rgba(9, 13, 26, 0.98));
+  box-shadow: 0 28px 60px -34px rgba(15, 23, 42, 0.95);
+  padding: 20px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog-panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #f8fafc;
+}
+
+.dialog-message {
+  margin: 0;
+  color: #cbd5f5;
+  font-size: 0.9rem;
+}
+
+.dialog-warning {
+  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(190, 18, 60, 0.18);
+  color: #fecaca;
+  font-size: 0.85rem;
+  padding: 10px 12px;
+  line-height: 1.35;
+}
+
+.dialog-summary {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.dialog-summary li {
+  list-style: disc;
+}
+
+.dialog-summary .dialog-sublist {
+  margin-top: 4px;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #cbd5f5;
+}
+
+.dialog-summary .dialog-sublist li {
+  list-style: circle;
+  font-size: 0.8rem;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .toast-container {
   position: fixed;
   right: 20px;
