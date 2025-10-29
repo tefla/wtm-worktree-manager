@@ -1,4 +1,4 @@
-import type { EnsureTerminalResponse, SettingsResponse, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
+import type { EnsureTerminalResponse, ProjectState, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
 
 declare global {
   interface Window {
@@ -9,9 +9,10 @@ declare global {
       refresh: (params: { path: string }) => Promise<WorkspaceSummary>;
       update: (params: { path: string }) => Promise<WorkspaceSummary>;
     };
-    settingsAPI: {
-      listEnvironments: () => Promise<SettingsResponse>;
-      setActiveEnvironment: (params: { name: string }) => Promise<SettingsResponse & { environment: { name: string; repoDir: string; workspaceRoot: string } }>;
+    projectAPI: {
+      getCurrent: () => Promise<ProjectState | null>;
+      openPath: (params: { path: string }) => Promise<ProjectState | null>;
+      openDialog: () => Promise<ProjectState | null>;
     };
     terminalAPI: {
       ensureSession: (params: { workspacePath: string; slot: string; command?: string; args?: string[]; cols?: number; rows?: number; env?: Record<string, string>; label?: string }) => Promise<EnsureTerminalResponse>;

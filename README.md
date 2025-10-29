@@ -15,6 +15,8 @@ tabs for common project commands.
   as git worktrees so you can tidy them up.
 - Create new workspaces by reusing existing branches or branching from a chosen
   base (defaults to the repo's current branch).
+- Per-project configuration stored alongside your repository in a `.wtm`
+  folder, so teams can keep presets in source control.
 - Rescan a workspace to refresh status without reloading the entire list.
 - Delete workspaces with dirty-tree warnings so uncommitted work is never lost
   silently.
@@ -22,8 +24,9 @@ tabs for common project commands.
 ## Prerequisites
 
 - Node.js 18+ with npm.
-- A git repository to manage plus a directory where worktrees should be created.
-  These paths are configured via the settings file (see below).
+- A git repository you want to manage. When you open a folder in WTM the app
+  will look for a `.wtm` directory inside it (creating one for you if missing).
+  That folder holds the per-project config and workspaces directory.
 
 ## Install Dependencies
 
@@ -58,32 +61,37 @@ npm run test:e2e      # Playwright electron smoke tests
 ```
 src/
 ├── main/
-│   ├── main.js           # Electron entry point + IPC wiring
-│   ├── preload.js        # Secure bridge exposing workspace APIs
-│   ├── settingsManager.js
-│   └── workspaceManager.js
-│                        # Git + worktree orchestration and settings IO
+│   ├── main.ts              # Electron entry point + IPC wiring
+│   ├── preload.ts           # Secure bridge exposing workspace & project APIs
+│   ├── projectConfig.ts     # Project config normalisation helpers
+│   ├── projectManager.ts    # Handles `.wtm` detection/creation per project
+│   ├── terminalManager.ts   # node-pty orchestration
+│   ├── terminalSessionStore.ts
+│   └── workspaceManager.ts  # Git + worktree orchestration
 └── renderer/
-    ├── index.html        # Renderer shell markup
-    ├── index.js          # Renderer logic calling preload bridge
-    └── styles.css        # UI styling
+    ├── index.html           # Renderer shell markup
+    ├── index.tsx            # Renderer entry
+    ├── App.tsx              # Main UI shell
+    └── styles.css           # UI styling
 ```
 
-## Settings
+## Project Configuration
 
-WTM stores its configuration in a simple JSON file so you can manage settings
-alongside the rest of your dotfiles. By default the app creates
-`~/.wtm/settings.json` on first launch with the following shape:
+Each project you open contains a `.wtm` folder in the repository root. Inside
+you'll find:
+
+```
+.wtm/
+├── config.json        # Project-level quick access + future settings
+├── workspaces/        # Git worktrees and standalone folders live here
+└── terminals.json     # Terminal session persistence for this project
+```
+
+The `config.json` file currently configures the preset quick-access terminals
+that appear for every workspace in that project:
 
 ```json
 {
-  "environments": {
-    "default": {
-      "repoDir": "/absolute/path/to/your/repo",
-      "workspaceRoot": "/absolute/path/to/worktrees"
-    }
-  },
-  "activeEnvironment": "default",
   "quickAccess": [
     { "key": "npm-install", "label": "npm i", "quickCommand": "npm i" },
     {
@@ -95,20 +103,42 @@ alongside the rest of your dotfiles. By default the app creates
 }
 ```
 
-Add additional environments to the `environments` object when you need to work
-with multiple repositories. The app exposes a dropdown in the header that lets
-you switch between the configured environments at runtime. The
-`activeEnvironment` key selects which environment is used when the app starts.
-All paths are resolved to absolute locations automatically.
+Update the list to match the commands you want in your project. Use an empty
+array if you prefer to rely entirely on ad-hoc terminals. WTM normalises keys
+for uniqueness automatically.
 
-Use the `quickAccess` array to configure the pre-defined terminal tabs that
-appear for each workspace. Each entry accepts a unique `key`, a human-friendly
-`label`, and the `quickCommand` to execute when the terminal is opened for the
-first time. Provide an empty array to disable the presets entirely and rely on
-the new “+” button to launch ad-hoc terminals.
+The `workspaces/` directory is where `git worktree` checkouts are created. You
+can safely add existing worktree folders here before opening the project and
+they will be picked up on the next refresh.
 
-To use an alternative settings location (useful for scripting or tests), set
-the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
+`terminals.json` stores the terminal history per workspace so that reopening a
+workspace restores its tabs. It is safe to delete when you want to start fresh.
+
+WTM persists the list of recently opened projects locally, making it quick to
+switch between repositories without re-browsing the filesystem.
+
+## Migration from the global settings file
+
+Earlier versions of WTM used a single `~/.wtm/settings.json` that listed
+“environments” with `repoDir` and `workspaceRoot` paths. On first launch after
+upgrading, the new UI will ask you to open a project folder. To migrate an old
+environment:
+
+1. Open the repository folder you previously referenced as `repoDir`.
+2. When prompted, allow WTM to create a default `.wtm` folder (or create it
+   manually and move your existing worktrees under `.wtm/workspaces`).
+3. Copy any custom quick-access entries from the old `quickAccess` array into
+   `.wtm/config.json`.
+4. Move or re-clone your worktrees into `.wtm/workspaces/` so the app can detect
+   them automatically.
+5. *(Optional)* If you want to keep terminal history, copy the relevant entries
+   from `~/.wtm/terminals.json` into the new `.wtm/terminals.json` file. The
+   format is unchanged, so you can either copy the entire file (if it only
+   contained this project) or merge the `workspaces` keys for the paths you
+   still use.
+
+The old `~/.wtm/settings.json` file is no longer read. You can safely remove it
+once you've migrated each environment into its project’s `.wtm` directory.
 
 ## Notes
 

@@ -1,7 +1,6 @@
 import { mkdir, stat } from "node:fs/promises";
 import { constants, promises as fsPromises } from "node:fs";
 import type { Dirent } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -248,21 +247,32 @@ export class WorkspaceManager {
   }
 
   configure(options: WorkspaceManagerOptions = {}): void {
-    const home = homedir();
-    const defaults = {
-      repoDir: join(home, "wtm", "repo"),
-      workspaceRoot: join(home, "wtm", "worktrees"),
-    };
+    if (options.repoDir) {
+      this.repoDir = resolve(options.repoDir);
+    } else {
+      this.repoDir = "";
+    }
 
-    this.repoDir = resolve(options.repoDir ?? defaults.repoDir);
-    this.workspaceRoot = resolve(options.workspaceRoot ?? defaults.workspaceRoot);
+    if (options.workspaceRoot) {
+      this.workspaceRoot = resolve(options.workspaceRoot);
+    } else if (!options.repoDir) {
+      this.workspaceRoot = "";
+    }
+  }
+
+  private ensureConfigured(): void {
+    if (!this.repoDir || !this.workspaceRoot) {
+      throw new Error("No project configured. Open a project to continue.");
+    }
   }
 
   async ensureWorkspaceRoot(): Promise<void> {
+    this.ensureConfigured();
     await mkdir(this.workspaceRoot, { recursive: true });
   }
 
   async git(args: string[], options: { cwd?: string; allowFailure?: boolean } = {}): Promise<GitCommandResult> {
+    this.ensureConfigured();
     const merged = {
       ...options,
       cwd: options.cwd ?? this.repoDir,
@@ -271,6 +281,7 @@ export class WorkspaceManager {
   }
 
   async getWorktreeEntries(): Promise<WorktreeEntry[]> {
+    this.ensureConfigured();
     await this.ensureWorkspaceRoot();
     const result = await this.git(["worktree", "list", "--porcelain"]);
     return parseWorktreeList(result.stdout, this.workspaceRoot);
@@ -304,6 +315,7 @@ export class WorkspaceManager {
   }
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
+    this.ensureConfigured();
     const entries = await this.getWorktreeEntries();
     const worktreeMap = new Map<string, true>();
     const workspaces: WorkspaceSummary[] = [];
@@ -357,6 +369,7 @@ export class WorkspaceManager {
   }
 
   async refreshWorkspace(path: string): Promise<WorkspaceSummary> {
+    this.ensureConfigured();
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => item.path === resolve(path));
     if (!entry) {
@@ -366,11 +379,13 @@ export class WorkspaceManager {
   }
 
   async branchExists(branch: string): Promise<boolean> {
+    this.ensureConfigured();
     const result = await this.git(["rev-parse", "--verify", branch], { allowFailure: true });
     return result.exitCode === 0;
   }
 
   private async resolveBaseRef(explicitBase?: string): Promise<string> {
+    this.ensureConfigured();
     const trimmed = explicitBase?.trim();
     if (trimmed) {
       return trimmed;
@@ -388,6 +403,7 @@ export class WorkspaceManager {
   }
 
   private async determineFetchTarget(baseRef: string): Promise<{ remote?: string; ref?: string }> {
+    this.ensureConfigured();
     if (!baseRef) {
       return {};
     }
@@ -413,6 +429,7 @@ export class WorkspaceManager {
   }
 
   async createWorkspace(params: { branch: string; baseRef?: string }): Promise<WorkspaceSummary> {
+    this.ensureConfigured();
     const branchName = params.branch.trim();
     if (!branchName) {
       throw new Error("Branch name is required.");
@@ -459,6 +476,7 @@ export class WorkspaceManager {
   }
 
   async deleteWorkspace(params: { path: string; force?: boolean }): Promise<{ success: boolean; reason?: string; message?: string; path?: string }> {
+    this.ensureConfigured();
     const targetPath = resolve(params.path);
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => item.path === targetPath);
@@ -489,6 +507,7 @@ export class WorkspaceManager {
   }
 
   async updateWorkspace(path: string): Promise<WorkspaceSummary> {
+    this.ensureConfigured();
     const targetPath = resolve(path);
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => resolve(item.path) === targetPath);

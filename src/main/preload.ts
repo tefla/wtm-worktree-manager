@@ -10,9 +10,10 @@ type WorkspaceAPI = {
   update: (params: unknown) => Promise<unknown>;
 };
 
-type SettingsAPI = {
-  listEnvironments: () => Promise<unknown>;
-  setActiveEnvironment: (params: unknown) => Promise<unknown>;
+type ProjectAPI = {
+  getCurrent: () => Promise<unknown>;
+  openPath: (params: unknown) => Promise<unknown>;
+  openDialog: () => Promise<unknown>;
 };
 
 type TerminalAPI = {
@@ -47,10 +48,11 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
   update: (params) => invoke("workspace:update", params),
 } satisfies WorkspaceAPI);
 
-contextBridge.exposeInMainWorld("settingsAPI", {
-  listEnvironments: () => invoke("settings:listEnvironments"),
-  setActiveEnvironment: (params) => invoke("settings:setActiveEnvironment", params),
-} satisfies SettingsAPI);
+contextBridge.exposeInMainWorld("projectAPI", {
+  getCurrent: () => invoke("project:getCurrent"),
+  openPath: (params) => invoke("project:openPath", params),
+  openDialog: () => invoke("project:openDialog"),
+} satisfies ProjectAPI);
 
 contextBridge.exposeInMainWorld("terminalAPI", {
   ensureSession: (params) => invoke("terminal:ensure", params),
@@ -70,7 +72,7 @@ contextBridge.exposeInMainWorld("terminalAPI", {
 declare global {
   interface Window {
     workspaceAPI: WorkspaceAPI;
-    settingsAPI: SettingsAPI;
+    projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
   }
 }

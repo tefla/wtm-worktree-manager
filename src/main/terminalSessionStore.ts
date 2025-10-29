@@ -54,6 +54,30 @@ class TerminalSessionStoreClass {
     this.dirty = false;
   }
 
+  async configure(options: TerminalSessionStoreOptions = {}): Promise<void> {
+    const nextPath = getStorePath(options.filePath ?? process.env.WTM_TERMINAL_STORE);
+    if (nextPath === this.filePath) {
+      return;
+    }
+
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+
+    if (this.dirty) {
+      try {
+        await this.flush();
+      } catch (error) {
+        console.error("Failed to persist terminal sessions before reconfiguration", error);
+      }
+    }
+
+    this.filePath = nextPath;
+    this.data = null;
+    this.dirty = false;
+  }
+
   async load(): Promise<TerminalStoreData> {
     if (this.data) {
       return this.data;
