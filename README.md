@@ -20,6 +20,7 @@ tabs for common project commands.
 - Rescan a workspace to refresh status without reloading the entire list.
 - Delete workspaces with dirty-tree warnings so uncommitted work is never lost
   silently.
+- Branch name input provides Jira ticket suggestions from a cached issue list.
 
 ## Prerequisites
 
@@ -158,6 +159,15 @@ environment:
 
 The old `~/.wtm/settings.json` file is no longer read. You can safely remove it
 once you've migrated each environment into its project’s `.wtm` directory.
+
+## Jira Ticket Cache
+
+WTM can suggest workspace names based on Jira tickets. Populate the cache by
+setting `WTM_JIRA_TICKET_COMMAND` to a shell command that outputs a JSON array
+of ticket objects (each with a `key`, `summary`, and optional `url`). The app
+stores the most recent result under `~/.wtm/jira-ticket-cache.json` and refreshes
+it automatically. Override the refresh interval by exporting
+`WTM_JIRA_CACHE_TTL` with a value in milliseconds.
 
 ## Notes
 

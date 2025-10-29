@@ -6,6 +6,7 @@ import { TerminalSessionStore } from "./terminalSessionStore";
 import { TerminalManager } from "./terminalManager";
 import { ProjectManager } from "./projectManager";
 import { TerminalHostClient } from "./terminalHostClient";
+import { jiraTicketCache } from "./jiraTicketCache";
 
 const isMac = process.platform === "darwin";
 
@@ -87,6 +88,11 @@ function exposeWorkspaceHandlers() {
   ipcMain.handle("workspace:list", async (event) => {
     const context = getContext(event);
     return context.workspaceManager.listWorkspaces();
+  });
+
+  ipcMain.handle("workspace:listBranches", async (event) => {
+    const context = getContext(event);
+    return context.workspaceManager.listBranches();
   });
 
   ipcMain.handle("workspace:create", async (event, params) => {
@@ -295,10 +301,28 @@ function exposeProjectHandlers() {
   });
 }
 
+function exposeJiraHandlers() {
+  ipcMain.handle("jira:listTickets", async (_event, params) => {
+    const forceRefresh = Boolean(params?.forceRefresh);
+    return jiraTicketCache.listTickets({ forceRefresh });
+  });
+
+  ipcMain.handle("jira:searchTickets", async (_event, params) => {
+    const query = typeof params?.query === "string" ? params.query : "";
+    const limit = typeof params?.limit === "number" ? params.limit : undefined;
+    const forceRefresh = Boolean(params?.forceRefresh);
+    if (!query.trim()) {
+      return [];
+    }
+    return jiraTicketCache.searchTickets(query, { limit, forceRefresh });
+  });
+}
+
 app.whenReady().then(async () => {
   exposeWorkspaceHandlers();
   exposeTerminalHandlers();
   exposeProjectHandlers();
+  exposeJiraHandlers();
   await createWindow();
 
   app.on("activate", async () => {
