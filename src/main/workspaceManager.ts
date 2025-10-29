@@ -370,6 +370,48 @@ export class WorkspaceManager {
     return result.exitCode === 0;
   }
 
+  private async resolveBaseRef(explicitBase?: string): Promise<string> {
+    const trimmed = explicitBase?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+
+    const currentBranch = await this.git(["rev-parse", "--abbrev-ref", "HEAD"], { allowFailure: true });
+    const branchName = currentBranch.stdout.trim();
+    if (branchName && branchName !== "HEAD") {
+      return branchName;
+    }
+
+    const headSha = await this.git(["rev-parse", "HEAD"], { allowFailure: true });
+    const sha = headSha.stdout.trim();
+    return sha || "HEAD";
+  }
+
+  private async determineFetchTarget(baseRef: string): Promise<{ remote?: string; ref?: string }> {
+    if (!baseRef) {
+      return {};
+    }
+
+    const slashIndex = baseRef.indexOf("/");
+    if (slashIndex > 0) {
+      const remoteCandidate = baseRef.slice(0, slashIndex);
+      const remainder = baseRef.slice(slashIndex + 1);
+      if (remainder) {
+        const remotesResult = await this.git(["remote"], { allowFailure: true });
+        const remotes = remotesResult.stdout
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+        if (remotes.includes(remoteCandidate)) {
+          return { remote: remoteCandidate, ref: remainder };
+        }
+      }
+    }
+
+    return { remote: "origin", ref: baseRef };
+  }
+
   async createWorkspace(params: { branch: string; baseRef?: string }): Promise<WorkspaceSummary> {
     const branchName = params.branch.trim();
     if (!branchName) {
@@ -402,9 +444,11 @@ export class WorkspaceManager {
       if (remoteResult.exitCode === 0) {
         await this.git(["fetch", "origin", `${branchName}:${branchName}`]);
       } else {
-        const baseRef = params.baseRef?.trim() || "origin/develop";
-        const [remote, ref] = baseRef.includes("/") ? baseRef.split("/", 2) : ["origin", baseRef];
-        await this.git(["fetch", remote, ref], { allowFailure: true });
+        const baseRef = await this.resolveBaseRef(params.baseRef);
+        const { remote, ref } = await this.determineFetchTarget(baseRef);
+        if (remote && ref) {
+          await this.git(["fetch", remote, ref], { allowFailure: true });
+        }
         await this.git(["worktree", "add", "-b", branchName, worktreePath, baseRef]);
         return this.buildWorkspace({ path: worktreePath, branch: branchName });
       }

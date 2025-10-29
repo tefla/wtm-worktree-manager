@@ -39,7 +39,7 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
             id="base-input"
             name="base"
             type="text"
-            placeholder="origin/develop"
+            placeholder="current repo branch"
             value={baseInput}
             onChange={(event) => onBaseChange(event.target.value)}
             disabled={createInFlight}
