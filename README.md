@@ -14,7 +14,7 @@ tabs for common project commands.
 - Highlights any stray folders in the workspace directory that are not linked
   as git worktrees so you can tidy them up.
 - Create new workspaces by reusing existing branches or branching from a chosen
-  base (defaults to `origin/develop`).
+  base (defaults to the repo's current branch).
 - Rescan a workspace to refresh status without reloading the entire list.
 - Delete workspaces with dirty-tree warnings so uncommitted work is never lost
   silently.
@@ -113,7 +113,7 @@ the `WTM_SETTINGS_PATH` environment variable to your desired JSON file.
 ## Notes
 
 - Workspace creation fetches remotes as needed and defaults to branching from
-  `origin/develop` when the target branch does not exist.
+  the repo's currently checked out branch when the target branch does not exist.
 - Worktree removal is performed via `git worktree remove`. The UI asks for
   confirmation if uncommitted changes are present unless deletion is forced.
 - Use the **Refresh** button whenever worktrees change outside the app.

@@ -65,3 +65,86 @@ test("WorkspaceManager.listWorkspaces includes plain folders", async () => {
   await fs.rm(workspaceRoot, { recursive: true, force: true });
   await fs.rm(repoDir, { recursive: true, force: true });
 });
+
+test("WorkspaceManager.createWorkspace defaults base ref to current repo branch", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+  const gitCalls = [];
+  const branchName = "new-feature";
+  const worktreePath = path.resolve(path.join(workspaceRoot, branchName));
+
+  manager.getWorktreeEntries = async () => [];
+  manager.buildWorkspace = async (entry) => ({
+    id: entry.branch ?? entry.path,
+    branch: entry.branch,
+    path: entry.path,
+    relativePath: entry.branch ?? entry.path,
+    headSha: "testsha",
+    status: {
+      clean: true,
+      ahead: 0,
+      behind: 0,
+      changeCount: 0,
+      summary: "No changes",
+      sampleChanges: [],
+    },
+    kind: "worktree",
+  });
+
+  manager.git = async (args) => {
+    gitCalls.push(args);
+    const command = args.join(" ");
+
+    if (command === "fetch origin") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    if (command === `rev-parse --verify ${branchName}`) {
+      return { stdout: "", stderr: "", exitCode: 1 };
+    }
+
+    if (command === `ls-remote --exit-code --heads origin ${branchName}`) {
+      return { stdout: "", stderr: "", exitCode: 1 };
+    }
+
+    if (command === "rev-parse --abbrev-ref HEAD") {
+      return { stdout: "main\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "rev-parse HEAD") {
+      return { stdout: "abc123\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "remote") {
+      return { stdout: "origin\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "fetch origin main") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    if (command.startsWith("worktree add -b")) {
+      const baseArg = args.at(-1);
+      assert.equal(baseArg, "main");
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    throw new Error(`Unexpected git command: ${command}`);
+  };
+
+  const summary = await manager.createWorkspace({ branch: branchName });
+  assert.equal(summary.branch, branchName);
+
+  const addCall = gitCalls.find((call) => call[0] === "worktree" && call[1] === "add");
+  assert.ok(addCall, "should add git worktree");
+  assert.equal(addCall.at(-1), "main");
+
+  const revParseCall = gitCalls.some(
+    (call) => call[0] === "rev-parse" && call[1] === "--abbrev-ref" && call[2] === "HEAD",
+  );
+  assert.ok(revParseCall, "should inspect current repo branch");
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+  await fs.rm(repoDir, { recursive: true, force: true });
+});
