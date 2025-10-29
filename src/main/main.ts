@@ -5,6 +5,7 @@ import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
 import { TerminalManager } from "./terminalManager";
 import { ProjectManager } from "./projectManager";
+import { TerminalHostClient } from "./terminalHostClient";
 import { jiraTicketCache } from "./jiraTicketCache";
 
 const isMac = process.platform === "darwin";
@@ -12,6 +13,7 @@ const isMac = process.platform === "darwin";
 interface WindowContext {
   workspaceManager: WorkspaceManager;
   terminalSessionStore: TerminalSessionStore;
+  terminalHostClient: TerminalHostClient;
   terminalManager: TerminalManager;
   projectManager: ProjectManager;
 }
@@ -21,11 +23,13 @@ const windowContexts = new Map<number, WindowContext>();
 function createWindowContext(target: BrowserWindow): WindowContext {
   const workspaceManager = new WorkspaceManager();
   const terminalSessionStore = new TerminalSessionStore();
-  const terminalManager = new TerminalManager(terminalSessionStore);
+  const terminalHostClient = new TerminalHostClient();
+  const terminalManager = new TerminalManager(terminalSessionStore, terminalHostClient);
   const projectManager = new ProjectManager(workspaceManager, terminalSessionStore);
   const context: WindowContext = {
     workspaceManager,
     terminalSessionStore,
+    terminalHostClient,
     terminalManager,
     projectManager,
   };
@@ -157,6 +161,12 @@ function exposeTerminalHandlers() {
     if (!params?.sessionId) return;
     const context = getContext(event);
     return context.terminalManager.dispose(params.sessionId, params.options || {});
+  });
+
+  ipcMain.handle("terminal:release", (event, params) => {
+    if (!params?.sessionId) return;
+    const context = getContext(event);
+    return context.terminalManager.release(params.sessionId, event.sender.id);
   });
 
   ipcMain.handle("terminal:listForWorkspace", (event, params) => {

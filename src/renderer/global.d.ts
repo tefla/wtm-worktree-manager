@@ -16,11 +16,15 @@ declare global {
       openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
     };
+    wtmEnv?: {
+      e2eProjectPath: string | null;
+    };
     terminalAPI: {
       ensureSession: (params: { workspacePath: string; slot: string; command?: string; args?: string[]; cols?: number; rows?: number; env?: Record<string, string>; label?: string }) => Promise<EnsureTerminalResponse>;
       write: (sessionId: string, data: string) => void;
       resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
       dispose: (sessionId: string, options?: Record<string, unknown>) => Promise<void>;
+      release: (sessionId: string) => Promise<void>;
       listForWorkspace: (workspacePath: string) => Promise<Record<string, { history: string }>>;
       getWorkspaceState: (workspacePath: string) => Promise<WorkspaceStateResponse>;
       listSavedWorkspaces: () => Promise<string[]>;
