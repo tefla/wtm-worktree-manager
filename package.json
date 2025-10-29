@@ -12,7 +12,7 @@
     "rebuild:native": "node scripts/ensure-node-pty.cjs --force",
     "dev": "node scripts/ensure-node-pty.cjs && npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
     "start": "npm run dev",
-    "test:unit": "npm run build:main && node --test tests/unit",
+    "test:unit": "npm run build:main && node --test \"tests/unit/**/*.js\"",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },
