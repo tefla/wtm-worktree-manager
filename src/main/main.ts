@@ -3,6 +3,7 @@ import path from "node:path";
 import { workspaceManager } from "./workspaceManager";
 import { terminalManager } from "./terminalManager";
 import { settingsManager } from "./settingsManager";
+import { jiraTicketCache } from "./jiraTicketCache";
 
 const isMac = process.platform === "darwin";
 
@@ -37,6 +38,10 @@ async function createWindow() {
 function exposeWorkspaceHandlers() {
   ipcMain.handle("workspace:list", async () => {
     return workspaceManager.listWorkspaces();
+  });
+
+  ipcMain.handle("workspace:listBranches", async () => {
+    return workspaceManager.listBranches();
   });
 
   ipcMain.handle("workspace:create", async (_event, params) => {
@@ -161,6 +166,23 @@ function exposeSettingsHandlers() {
   });
 }
 
+function exposeJiraHandlers() {
+  ipcMain.handle("jira:listTickets", async (_event, params) => {
+    const forceRefresh = Boolean(params?.forceRefresh);
+    return jiraTicketCache.listTickets({ forceRefresh });
+  });
+
+  ipcMain.handle("jira:searchTickets", async (_event, params) => {
+    const query = typeof params?.query === "string" ? params.query : "";
+    const limit = typeof params?.limit === "number" ? params.limit : undefined;
+    const forceRefresh = Boolean(params?.forceRefresh);
+    if (!query.trim()) {
+      return [];
+    }
+    return jiraTicketCache.searchTickets(query, { limit, forceRefresh });
+  });
+}
+
 app.whenReady().then(async () => {
   try {
     await settingsManager.load();
@@ -176,6 +198,7 @@ app.whenReady().then(async () => {
   exposeWorkspaceHandlers();
   exposeTerminalHandlers();
   exposeSettingsHandlers();
+  exposeJiraHandlers();
   await createWindow();
 
   app.on("activate", async () => {

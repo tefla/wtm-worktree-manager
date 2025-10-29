@@ -356,6 +356,37 @@ export class WorkspaceManager {
     });
   }
 
+  async listBranches(): Promise<{ local: string[]; remote: string[] }> {
+    const parseList = (stdout: string, options: { skipHeadRemotes?: boolean } = {}) => {
+      const { skipHeadRemotes = false } = options;
+      const seen = new Set<string>();
+      const items: string[] = [];
+      stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .forEach((line) => {
+          if (!line) return;
+          if (skipHeadRemotes && /\/HEAD$/.test(line)) {
+            return;
+          }
+          if (seen.has(line)) {
+            return;
+          }
+          seen.add(line);
+          items.push(line);
+        });
+      return items.sort((a, b) => a.localeCompare(b));
+    };
+
+    const localResult = await this.git(["branch", "--format=%(refname:short)"], { allowFailure: true });
+    const remoteResult = await this.git(["branch", "--remotes", "--format=%(refname:short)"], { allowFailure: true });
+
+    const local = localResult.exitCode === 0 ? parseList(localResult.stdout) : [];
+    const remote = remoteResult.exitCode === 0 ? parseList(remoteResult.stdout, { skipHeadRemotes: true }) : [];
+
+    return { local, remote };
+  }
+
   async refreshWorkspace(path: string): Promise<WorkspaceSummary> {
     const entries = await this.getWorktreeEntries();
     const entry = entries.find((item) => item.path === resolve(path));

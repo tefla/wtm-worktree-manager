@@ -2,7 +2,7 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
-import { CreateWorkspaceForm } from "./components/CreateWorkspaceForm";
+import { CreateWorkspaceForm, type BranchSuggestion } from "./components/CreateWorkspaceForm";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
 import type {
@@ -22,6 +22,8 @@ import type {
   WorkspaceStateResponse,
   WorkspaceSummary,
 } from "./types";
+import { buildWorkspaceBranchName } from "../shared/jira";
+import type { JiraTicketSummary } from "../shared/jira";
 
 type ToastKind = "info" | "success" | "error";
 
@@ -51,6 +53,7 @@ const TERMINAL_THEME = {
   cursor: "#38bdf8",
   selectionBackground: "#1e293b",
 };
+const MAX_BRANCH_SUGGESTIONS = 8;
 
 function slugify(value: string): string {
   return value
@@ -124,7 +127,10 @@ function App(): JSX.Element {
   const [refreshing, setRefreshing] = useState(false);
   const [branchInput, setBranchInput] = useState("");
   const [baseInput, setBaseInput] = useState("");
+  const autoBaseRefRef = useRef<string | null>(null);
   const [createInFlight, setCreateInFlight] = useState(false);
+  const [jiraTickets, setJiraTickets] = useState<JiraTicketSummary[]>([]);
+  const [branchCatalog, setBranchCatalog] = useState<{ local: string[]; remote: string[] }>({ local: [], remote: [] });
   const [environments, setEnvironments] = useState<SettingsResponse["environments"]>({});
   const [activeEnvironment, setActiveEnvironment] = useState<string>("");
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
@@ -196,6 +202,70 @@ function App(): JSX.Element {
       pushToast("Failed to load settings", "error");
     }
   }, [pushToast]);
+
+  const loadBranches = useCallback(async () => {
+    if (!window.workspaceAPI?.listBranches) {
+      setBranchCatalog({ local: [], remote: [] });
+      return;
+    }
+    try {
+      const response = await window.workspaceAPI.listBranches();
+      const payload =
+        response && typeof response === "object"
+          ? (response as { local?: unknown; remote?: unknown })
+          : { local: undefined, remote: undefined };
+      const normalizeList = (value: unknown) =>
+        Array.isArray(value)
+          ? value
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter((entry): entry is string => Boolean(entry))
+          : [];
+      setBranchCatalog({
+        local: normalizeList(payload.local),
+        remote: normalizeList(payload.remote),
+      });
+    } catch (error) {
+      console.warn("Failed to load branch catalog", error);
+    }
+  }, []);
+
+  const loadJiraTickets = useCallback(async (options: { forceRefresh?: boolean } = {}) => {
+    if (!window.jiraAPI?.listTickets) {
+      return;
+    }
+    try {
+      const response = await window.jiraAPI.listTickets(options);
+      if (!Array.isArray(response)) {
+        setJiraTickets([]);
+        return;
+      }
+      const seenKeys = new Set<string>();
+      const normalized: JiraTicketSummary[] = [];
+      for (const ticket of response) {
+        if (!ticket || typeof ticket.key !== "string" || typeof ticket.summary !== "string") {
+          continue;
+        }
+        const key = ticket.key.toUpperCase();
+        const summary = ticket.summary.trim();
+        if (!summary) {
+          continue;
+        }
+        if (seenKeys.has(key)) {
+          continue;
+        }
+        seenKeys.add(key);
+        normalized.push({
+          key,
+          summary,
+          ...(typeof ticket.url === "string" && ticket.url ? { url: ticket.url } : {}),
+        });
+      }
+      normalized.sort((a, b) => a.key.localeCompare(b.key));
+      setJiraTickets(normalized);
+    } catch (error) {
+      console.warn("Failed to load Jira ticket cache", error);
+    }
+  }, []);
 
   const generateEphemeralLabel = useCallback((workspaceState: WorkspaceTabState): string => {
     const label = `Terminal ${workspaceState.ephemeralCounter}`;
@@ -648,6 +718,7 @@ function App(): JSX.Element {
         setActiveEnvironment(response.activeEnvironment);
         const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
         defaultTerminalsRef.current = normalized;
+        await loadJiraTickets({ forceRefresh: true });
 
         workspaceTabsRef.current.forEach((state, path) => {
           closeWorkspace(path, { preserveState: true });
@@ -657,12 +728,13 @@ function App(): JSX.Element {
         setActiveWorkspacePath(null);
         pushToast(`Switched to ${name}`, "success");
         await loadWorkspaces();
+        await loadBranches();
       } catch (error) {
         console.error("Failed to switch environment", error);
         pushToast("Failed to switch environment", "error");
       }
     },
-    [activeEnvironment, closeWorkspace, loadWorkspaces, pushToast],
+    [activeEnvironment, closeWorkspace, loadBranches, loadJiraTickets, loadWorkspaces, pushToast],
   );
 
   const restoreWorkspacesFromStore = useCallback(
@@ -730,6 +802,22 @@ function App(): JSX.Element {
         pushToast("Branch name is required", "error");
         return;
       }
+      const existingWorkspace = workspaces.find(
+        (item) =>
+          item.kind === "worktree" &&
+          (item.branch === branch || item.relativePath === branch || item.path === branch),
+      );
+      if (existingWorkspace) {
+        pushToast(
+          `Workspace '${existingWorkspace.branch ?? existingWorkspace.relativePath}' already exists`,
+          "success",
+        );
+        autoBaseRefRef.current = null;
+        setBranchInput("");
+        setBaseInput("");
+        await handleWorkspaceSelect(existingWorkspace);
+        return;
+      }
       setCreateInFlight(true);
       try {
         const workspace = await window.workspaceAPI.create({
@@ -737,9 +825,11 @@ function App(): JSX.Element {
           baseRef: baseRef || undefined,
         });
         pushToast(`Workspace '${workspace.branch ?? workspace.relativePath}' ready`, "success");
+        autoBaseRefRef.current = null;
         setBranchInput("");
         setBaseInput("");
         await loadWorkspaces();
+        await loadBranches();
         await handleWorkspaceSelect(workspace);
       } catch (error) {
         console.error("Failed to create workspace", error);
@@ -748,18 +838,20 @@ function App(): JSX.Element {
         setCreateInFlight(false);
       }
     },
-    [baseInput, branchInput, handleWorkspaceSelect, loadWorkspaces, pushToast],
+    [baseInput, branchInput, handleWorkspaceSelect, loadBranches, loadWorkspaces, pushToast, workspaces],
   );
 
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
       await loadWorkspaces();
+      await loadBranches();
+      await loadJiraTickets({ forceRefresh: true });
       pushToast("Workspace list refreshed", "success");
     } finally {
       setRefreshing(false);
     }
-  }, [loadWorkspaces, pushToast]);
+  }, [loadBranches, loadJiraTickets, loadWorkspaces, pushToast]);
 
   const handleRefreshWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
@@ -836,9 +928,13 @@ function App(): JSX.Element {
     void (async () => {
       await loadSettings();
       const list = await loadWorkspaces();
-      await restoreWorkspacesFromStore(list);
+      await Promise.all([restoreWorkspacesFromStore(list), loadBranches()]);
     })();
-  }, [loadSettings, loadWorkspaces, restoreWorkspacesFromStore]);
+  }, [loadBranches, loadSettings, loadWorkspaces, restoreWorkspacesFromStore]);
+
+  useEffect(() => {
+    void loadJiraTickets();
+  }, [activeEnvironment, loadJiraTickets]);
 
   useEffect(() => {
     const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
@@ -914,6 +1010,200 @@ function App(): JSX.Element {
     return () => window.removeEventListener("resize", handleResize);
   }, [activeWorkspacePath, renderTicker]);
 
+  const branchSuggestions = useMemo<BranchSuggestion[]>(() => {
+    const query = branchInput.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+
+    const SOURCE_BASE_PRIORITY: Record<BranchSuggestion["source"], number> = {
+      workspace: 0,
+      local: 10,
+      remote: 20,
+      jira: 30,
+    };
+
+    const evaluateMatch = (terms: string[]): number | null => {
+      if (!terms.length) {
+        return null;
+      }
+      for (const term of terms) {
+        if (term.startsWith(query)) {
+          return 0;
+        }
+      }
+      for (const term of terms) {
+        if (term.includes(query)) {
+          return 1;
+        }
+      }
+      return null;
+    };
+
+    const reservedBranchNames = new Set<string>();
+    const localBranchNames = new Set<string>();
+    const candidates: Array<{ suggestion: BranchSuggestion; priority: number }> = [];
+    const seenIds = new Set<string>();
+
+    const pushCandidate = (suggestion: BranchSuggestion, terms: string[]) => {
+      if (seenIds.has(suggestion.id)) {
+        return;
+      }
+      const normalizedTerms = terms.map((term) => term.toLowerCase());
+      const match = evaluateMatch(normalizedTerms);
+      if (match === null) {
+        return;
+      }
+      const basePriority = SOURCE_BASE_PRIORITY[suggestion.source];
+      candidates.push({ suggestion, priority: basePriority + match });
+      seenIds.add(suggestion.id);
+    };
+
+    workspaces.forEach((workspace) => {
+      if (workspace.kind !== "worktree") {
+        return;
+      }
+      const branchName = workspace.branch?.trim() ?? "";
+      const relativePath = workspace.relativePath?.trim() ?? "";
+      const value = branchName || relativePath;
+      if (!value) {
+        return;
+      }
+      const lowerBranch = branchName.toLowerCase();
+      const lowerRelative = relativePath.toLowerCase();
+      if (branchName) {
+        reservedBranchNames.add(lowerBranch);
+      }
+      if (relativePath) {
+        reservedBranchNames.add(lowerRelative);
+      }
+      const terms = [value.toLowerCase()];
+      if (branchName && branchName !== value) {
+        terms.push(lowerBranch);
+      }
+      if (relativePath && relativePath !== value) {
+        terms.push(lowerRelative);
+      }
+      pushCandidate(
+        {
+          id: `workspace:${workspace.path}`,
+          value,
+          label: `Workspace • ${value}`,
+          source: "workspace",
+        },
+        terms,
+      );
+    });
+
+    branchCatalog.local.forEach((entry) => {
+      const name = entry.trim();
+      if (!name) {
+        return;
+      }
+      const lower = name.toLowerCase();
+      localBranchNames.add(lower);
+      if (reservedBranchNames.has(lower)) {
+        return;
+      }
+      reservedBranchNames.add(lower);
+      pushCandidate(
+        {
+          id: `local:${name}`,
+          value: name,
+          label: `Local branch • ${name}`,
+          source: "local",
+        },
+        [lower],
+      );
+    });
+
+    branchCatalog.remote.forEach((entry) => {
+      const ref = entry.trim();
+      if (!ref) {
+        return;
+      }
+      const slashIndex = ref.indexOf("/");
+      if (slashIndex <= 0 || slashIndex === ref.length - 1) {
+        return;
+      }
+      const branchName = ref.slice(slashIndex + 1);
+      if (!branchName) {
+        return;
+      }
+      const lowerBranch = branchName.toLowerCase();
+      if (reservedBranchNames.has(lowerBranch) || localBranchNames.has(lowerBranch)) {
+        return;
+      }
+      reservedBranchNames.add(lowerBranch);
+      pushCandidate(
+        {
+          id: `remote:${ref}`,
+          value: branchName,
+          label: `Remote branch • ${ref} (create ${branchName})`,
+          source: "remote",
+          baseRef: ref,
+        },
+        [lowerBranch, ref.toLowerCase()],
+      );
+    });
+
+    jiraTickets.forEach((ticket) => {
+      const branchName = buildWorkspaceBranchName(ticket);
+      if (!branchName) {
+        return;
+      }
+      const lowerBranch = branchName.toLowerCase();
+      if (reservedBranchNames.has(lowerBranch)) {
+        return;
+      }
+      pushCandidate(
+        {
+          id: `jira:${ticket.key}`,
+          value: branchName,
+          label: `Ticket • ${ticket.key}: ${ticket.summary}`,
+          source: "jira",
+        },
+        [ticket.key.toLowerCase(), lowerBranch, ticket.summary.toLowerCase()],
+      );
+    });
+
+    candidates.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+      return a.suggestion.label.localeCompare(b.suggestion.label);
+    });
+
+    return candidates.slice(0, MAX_BRANCH_SUGGESTIONS).map((entry) => entry.suggestion);
+  }, [branchCatalog, branchInput, jiraTickets, workspaces]);
+
+  const handleBranchChange = useCallback(
+    (value: string) => {
+      setBranchInput(value);
+      if (!value) {
+        if (autoBaseRefRef.current) {
+          setBaseInput((current) => (current === autoBaseRefRef.current ? "" : current));
+          autoBaseRefRef.current = null;
+        }
+        return;
+      }
+      const match = branchSuggestions.find((suggestion) => suggestion.value === value);
+      if (match?.baseRef) {
+        autoBaseRefRef.current = match.baseRef;
+        setBaseInput(match.baseRef);
+      } else if (autoBaseRefRef.current) {
+        setBaseInput((current) => (current === autoBaseRefRef.current ? "" : current));
+        autoBaseRefRef.current = null;
+      }
+    },
+    [branchSuggestions],
+  );
+
+  const handleBaseChange = useCallback((value: string) => {
+    autoBaseRefRef.current = null;
+    setBaseInput(value);
+  }, []);
+
   const workspaceList = useMemo(
     () =>
       [...workspaces].sort((a, b) => {
@@ -942,8 +1232,9 @@ function App(): JSX.Element {
         branchInput={branchInput}
         baseInput={baseInput}
         createInFlight={createInFlight}
-        onBranchChange={setBranchInput}
-        onBaseChange={setBaseInput}
+        branchSuggestions={branchSuggestions}
+        onBranchChange={handleBranchChange}
+        onBaseChange={handleBaseChange}
         onSubmit={handleCreateWorkspace}
       />
 

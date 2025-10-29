@@ -1,9 +1,18 @@
 import React, { FormEvent } from "react";
 
+export interface BranchSuggestion {
+  id: string;
+  value: string;
+  label: string;
+  source: "workspace" | "local" | "remote" | "jira";
+  baseRef?: string;
+}
+
 interface CreateWorkspaceFormProps {
   branchInput: string;
   baseInput: string;
   createInFlight: boolean;
+  branchSuggestions: BranchSuggestion[];
   onBranchChange: (value: string) => void;
   onBaseChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -13,10 +22,13 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
   branchInput,
   baseInput,
   createInFlight,
+  branchSuggestions,
   onBranchChange,
   onBaseChange,
   onSubmit,
 }) => {
+  const suggestionListId = "branch-suggestions";
+
   return (
     <section className="create-section">
       <form id="create-form" autoComplete="off" onSubmit={onSubmit}>
@@ -31,7 +43,13 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
             onChange={(event) => onBranchChange(event.target.value)}
             required
             disabled={createInFlight}
+            list={suggestionListId}
           />
+          <datalist id={suggestionListId}>
+            {branchSuggestions.map((suggestion) => (
+              <option key={suggestion.id} value={suggestion.value} label={suggestion.label} />
+            ))}
+          </datalist>
         </label>
         <label className="field optional">
           <span>Base ref (optional)</span>
