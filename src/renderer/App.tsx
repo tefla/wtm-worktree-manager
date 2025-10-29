@@ -2,7 +2,6 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
-import { CreateWorkspaceForm } from "./components/CreateWorkspaceForm";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
 import type {
@@ -1138,18 +1137,17 @@ function App(): JSX.Element {
         onSelectProject={handleProjectSelect}
         onOpenProject={handleOpenProjectDialog}
         onRefreshAll={handleRefreshAll}
+        createWorkspace={{
+          branchInput,
+          baseInput,
+          createInFlight,
+          disabled: !activeProjectPath,
+          onBranchChange: setBranchInput,
+          onBaseChange: setBaseInput,
+          onSubmit: handleCreateWorkspace,
+        }}
         openProjectsInNewWindow={openProjectsInNewWindow}
         onToggleNewWindow={handleToggleNewWindow}
-      />
-
-      <CreateWorkspaceForm
-        branchInput={branchInput}
-        baseInput={baseInput}
-        createInFlight={createInFlight}
-        disabled={!activeProjectPath}
-        onBranchChange={setBranchInput}
-        onBaseChange={setBaseInput}
-        onSubmit={handleCreateWorkspace}
       />
 
       <main className="content-shell">
