@@ -12,6 +12,7 @@
     "rebuild:native": "node scripts/ensure-node-pty.cjs --force",
     "dev": "node scripts/ensure-node-pty.cjs && npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
     "start": "npm run dev",
+    "package": "npm run build && npx --yes electron-builder@25.1.8 --publish never",
     "test:unit": "npm run build:main && node --test tests/unit",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
@@ -31,5 +32,31 @@
     "electron": "^30.0.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.5.4"
+  },
+  "build": {
+    "appId": "com.wtm.worktreemanager",
+    "productName": "WTM Worktree Manager",
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
   }
 }
