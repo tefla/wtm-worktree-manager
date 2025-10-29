@@ -5,6 +5,7 @@ import type {
   TerminalExitPayload,
   WorkspaceStateResponse,
   WorkspaceSummary,
+  ProjectConfig,
 } from "./types";
 import type { JiraTicketSummary } from "../shared/jira";
 import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
@@ -24,6 +25,7 @@ declare global {
       openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       listComposeServices: () => Promise<DockerComposeServicesSnapshot>;
+      updateConfig: (params: { config: ProjectConfig }) => Promise<ProjectState>;
     };
     wtmEnv?: {
       e2eProjectPath: string | null;

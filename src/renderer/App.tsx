@@ -5,6 +5,7 @@ import { AppHeader } from "./components/AppHeader";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
 import { ComposeServicesPanel } from "./components/ComposeServicesPanel";
+import { SettingsOverlay, QuickAccessDraft } from "./components/SettingsOverlay";
 import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
   TerminalDefinition,
@@ -22,6 +23,7 @@ import type {
   TerminalExitPayload,
   WorkspaceStateResponse,
   WorkspaceSummary,
+  ProjectConfig,
 } from "./types";
 import { buildWorkspaceBranchName } from "../shared/jira";
 import type { JiraTicketSummary } from "../shared/jira";
@@ -244,6 +246,10 @@ function App(): JSX.Element {
   const toastIdRef = useRef(0);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
   const [updatingWorkspaces, setUpdatingWorkspaces] = useState<Record<string, boolean>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<QuickAccessDraft[]>([]);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const pushToast = useCallback((message: string, kind: ToastKind = "info") => {
     toastIdRef.current += 1;
@@ -257,6 +263,91 @@ function App(): JSX.Element {
   const handleToggleNewWindow = useCallback((value: boolean) => {
     setOpenProjectsInNewWindow(value);
   }, []);
+
+  const openSettingsOverlay = useCallback(() => {
+    const baseDefinitions = defaultTerminalsRef.current.length
+      ? defaultTerminalsRef.current
+      : normaliseQuickAccessList([], { fallbackToDefault: true });
+    setSettingsDraft(
+      baseDefinitions.map((definition) => ({
+        id: definition.key,
+        initialKey: definition.key,
+        label: definition.label,
+        quickCommand: definition.quickCommand ?? "",
+      })),
+    );
+    setSettingsError(null);
+    setSettingsOpen(true);
+  }, []);
+
+  const closeSettingsOverlay = useCallback(() => {
+    if (settingsSaving) {
+      return;
+    }
+    setSettingsOpen(false);
+    setSettingsError(null);
+  }, [settingsSaving]);
+
+  const updateSettingsEntry = useCallback(
+    (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => {
+      setSettingsDraft((current) =>
+        current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+      );
+    },
+    [],
+  );
+
+  const removeSettingsEntry = useCallback((id: string) => {
+    setSettingsDraft((current) => current.filter((entry) => entry.id !== id));
+  }, []);
+
+  const moveSettingsEntry = useCallback((id: string, direction: "up" | "down") => {
+    setSettingsDraft((current) => {
+      const index = current.findIndex((entry) => entry.id === id);
+      if (index === -1) {
+        return current;
+      }
+      const targetIndex = direction === "up" ? Math.max(0, index - 1) : Math.min(current.length - 1, index + 1);
+      if (targetIndex === index) {
+        return current;
+      }
+      const next = [...current];
+      const [item] = next.splice(index, 1);
+      next.splice(targetIndex, 0, item);
+      return next;
+    });
+  }, []);
+
+  const addSettingsEntry = useCallback(() => {
+    setSettingsDraft((current) => {
+      const id = `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      return [
+        ...current,
+        {
+          id,
+          initialKey: null,
+          label: "",
+          quickCommand: "",
+        },
+      ];
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSettingsOverlay();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [settingsOpen, closeSettingsOverlay]);
 
   const refreshComposeServices = useCallback(async () => {
     if (!activeProjectPath) {
@@ -660,6 +751,129 @@ function App(): JSX.Element {
     },
     [disposeTerminalRuntime, setActiveTerminal],
   );
+
+  const syncWorkspaceQuickAccess = useCallback(
+    (entries: QuickAccessEntry[]) => {
+      const definitions = normaliseQuickAccessList(entries, { fallbackToDefault: true });
+      defaultTerminalsRef.current = definitions;
+      const desiredKeys = new Set(definitions.map((definition) => definition.key));
+
+      workspaceTabsRef.current.forEach((workspaceState) => {
+        const workspacePath = workspaceState.workspace.path;
+
+        const removalKeys: string[] = [];
+        workspaceState.terminals.forEach((record, key) => {
+          if (!desiredKeys.has(key) && !record.isEphemeral) {
+            removalKeys.push(key);
+          }
+        });
+
+        removalKeys.forEach((targetKey) => {
+          const record = workspaceState.terminals.get(targetKey);
+          if (!record) {
+            return;
+          }
+          const wasActive = workspaceState.activeTerminalKey === targetKey;
+          disposeTerminalRuntime(workspacePath, record, false);
+          workspaceState.terminals.delete(targetKey);
+          workspaceState.terminalOrder = workspaceState.terminalOrder.filter((existingKey) => existingKey !== targetKey);
+          if (workspaceState.savedState.terminals) {
+            delete workspaceState.savedState.terminals[targetKey];
+          }
+          if (wasActive) {
+            const fallback = workspaceState.terminalOrder.length ? workspaceState.terminalOrder[0] : null;
+            setActiveTerminal(workspaceState, fallback);
+          }
+        });
+
+        definitions.forEach((definition) => {
+          setupTerminalRecord(workspaceState, definition);
+        });
+
+        const preserved = workspaceState.terminalOrder.filter((key) => !desiredKeys.has(key));
+        workspaceState.terminalOrder = [
+          ...definitions.map((definition) => definition.key),
+          ...preserved,
+        ];
+
+        if (workspaceState.activeTerminalKey && !workspaceState.terminalOrder.includes(workspaceState.activeTerminalKey)) {
+          const fallback = workspaceState.terminalOrder.length ? workspaceState.terminalOrder[0] : null;
+          setActiveTerminal(workspaceState, fallback);
+        }
+      });
+
+      forceRender();
+    },
+    [disposeTerminalRuntime, setActiveTerminal, setupTerminalRecord, forceRender],
+  );
+
+  const handleSettingsSave = useCallback(async () => {
+    if (settingsSaving) {
+      return;
+    }
+    if (!window.projectAPI?.updateConfig) {
+      setSettingsError("Settings are not available in this build.");
+      return;
+    }
+    setSettingsError(null);
+
+    const trimmed = settingsDraft.map((entry) => ({
+      ...entry,
+      label: entry.label.trim(),
+      quickCommand: entry.quickCommand.trim(),
+    }));
+
+    if (trimmed.length === 0) {
+      setSettingsError("Add at least one quick access command before saving.");
+      return;
+    }
+
+    const missingCommand = trimmed.some((entry) => !entry.quickCommand);
+    if (missingCommand) {
+      setSettingsError("Each quick access entry needs a command.");
+      return;
+    }
+
+    const usedKeys = new Set<string>();
+    const quickAccess: QuickAccessEntry[] = [];
+
+    trimmed.forEach((entry, index) => {
+      const fallbackLabel = entry.label || entry.quickCommand;
+      const slugBase = slugify(fallbackLabel);
+      const preferredBase =
+        entry.initialKey && entry.initialKey.trim() ? entry.initialKey.trim() : slugBase || `slot-${index + 1}`;
+      let candidate = preferredBase || `slot-${index + 1}`;
+      let counter = 2;
+      while (usedKeys.has(candidate)) {
+        const suffixBase =
+          entry.initialKey && entry.initialKey.trim() ? entry.initialKey.trim() : slugBase || preferredBase || `slot-${index + 1}`;
+        candidate = `${suffixBase}-${counter}`;
+        counter += 1;
+      }
+      usedKeys.add(candidate);
+      quickAccess.push({
+        key: candidate,
+        label: fallbackLabel,
+        quickCommand: entry.quickCommand,
+      });
+    });
+
+    const config: ProjectConfig = { quickAccess };
+    setSettingsSaving(true);
+    try {
+      const state = await window.projectAPI.updateConfig({ config });
+      applyProjectState(state, { persistRecent: false });
+      syncWorkspaceQuickAccess(state.quickAccess);
+      setSettingsError(null);
+      setSettingsOpen(false);
+      pushToast("Settings updated", "success");
+    } catch (error) {
+      console.error("Failed to update project settings", error);
+      setSettingsError("Failed to save settings. Please try again.");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [settingsSaving, settingsDraft, applyProjectState, syncWorkspaceQuickAccess, pushToast]);
 
   const startTerminalSession = useCallback(
     async (workspaceState: WorkspaceTabState, record: TerminalRecord, container: HTMLDivElement) => {
@@ -1534,6 +1748,8 @@ function App(): JSX.Element {
         }}
         openProjectsInNewWindow={openProjectsInNewWindow}
         onToggleNewWindow={handleToggleNewWindow}
+        onOpenSettings={openSettingsOverlay}
+        settingsDisabled={!activeProjectPath}
       />
 
       <main className="content-shell">
@@ -1569,6 +1785,20 @@ function App(): JSX.Element {
           onRefresh={refreshComposeServices}
         />
       </main>
+
+      {settingsOpen ? (
+        <SettingsOverlay
+          quickAccess={settingsDraft}
+          saving={settingsSaving}
+          error={settingsError}
+          onRequestClose={closeSettingsOverlay}
+          onSubmit={handleSettingsSave}
+          onEntryAdd={addSettingsEntry}
+          onEntryChange={updateSettingsEntry}
+          onEntryRemove={removeSettingsEntry}
+          onEntryMove={moveSettingsEntry}
+        />
+      ) : null}
 
       <div id="toast-container" className="toast-container">
         {toastList.map((toast) => (

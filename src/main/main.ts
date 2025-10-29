@@ -8,6 +8,7 @@ import { ProjectManager } from "./projectManager";
 import { TerminalHostClient } from "./terminalHostClient";
 import { jiraTicketCache } from "./jiraTicketCache";
 import { DockerComposeInspector } from "./dockerComposeInspector";
+import type { ProjectConfig } from "./projectConfig";
 
 const isMac = process.platform === "darwin";
 
@@ -218,6 +219,15 @@ function exposeProjectHandlers() {
   ipcMain.handle("project:listComposeServices", async (event) => {
     const context = getContext(event);
     return context.projectManager.listComposeServices();
+  });
+
+  ipcMain.handle("project:updateConfig", async (event, params) => {
+    const context = getContext(event);
+    const config: unknown = params?.config ?? params;
+    if (!config || typeof config !== "object") {
+      throw new Error("Project configuration payload is required");
+    }
+    return context.projectManager.updateConfig(config as ProjectConfig);
   });
 
   ipcMain.handle("project:openPath", async (event, params) => {

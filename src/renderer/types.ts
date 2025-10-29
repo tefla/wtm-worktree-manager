@@ -44,6 +44,10 @@ export interface ProjectState {
   composeError?: string | null;
 }
 
+export interface ProjectConfig {
+  quickAccess: QuickAccessEntry[];
+}
+
 export interface EnsureTerminalResponse {
   sessionId: string;
   workspacePath: string;

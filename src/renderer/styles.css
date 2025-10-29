@@ -1099,6 +1099,120 @@ code {
   list-style: disc;
 }
 
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-close {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.dialog-close:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.settings-dialog {
+  width: min(620px, calc(100% - 32px));
+  max-width: 620px;
+  gap: 16px;
+}
+
+.settings-dialog h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quick-access-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: clamp(220px, 48vh, 360px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.quick-access-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(71, 85, 105, 0.4);
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.quick-access-row.has-error {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.quick-access-fields {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.quick-access-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+}
+
+.quick-access-field input {
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(15, 23, 42, 0.65);
+  color: #f8fafc;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+}
+
+.quick-access-field input:focus {
+  outline: 2px solid rgba(59, 130, 246, 0.65);
+  outline-offset: 0;
+}
+
+.quick-access-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-access-index {
+  color: #64748b;
+  font-size: 0.85rem;
+  padding-right: 4px;
+}
+
+.add-row-button {
+  align-self: flex-start;
+}
+
 .dialog-summary .dialog-sublist {
   margin-top: 4px;
   padding-left: 16px;

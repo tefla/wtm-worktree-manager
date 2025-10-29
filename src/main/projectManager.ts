@@ -2,7 +2,14 @@ import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { loadProjectConfig, ProjectConfig, QuickAccessEntry, saveProjectConfig, defaultProjectConfig } from "./projectConfig";
+import {
+  loadProjectConfig,
+  ProjectConfig,
+  QuickAccessEntry,
+  saveProjectConfig,
+  defaultProjectConfig,
+  normaliseProjectConfig,
+} from "./projectConfig";
 import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
 import { DockerComposeInspector } from "./dockerComposeInspector";
@@ -183,6 +190,19 @@ export class ProjectManager {
       return { projectName: null, services: [] };
     }
     return this.dockerComposeInspector.inspect(this.current.projectPath);
+  }
+
+  async updateConfig(config: ProjectConfig): Promise<ProjectState> {
+    if (!this.current) {
+      throw new Error("No project selected");
+    }
+    const normalised = normaliseProjectConfig(config);
+    await saveProjectConfig(this.current.configPath, normalised);
+    this.current.config = {
+      ...normalised,
+      quickAccess: normalised.quickAccess.map((entry) => ({ ...entry })),
+    };
+    return this.buildProjectState(this.current);
   }
 
   private async buildProjectState(context: ProjectContext): Promise<ProjectState> {

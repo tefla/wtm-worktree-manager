@@ -16,6 +16,7 @@ type ProjectAPI = {
   openPath: (params: unknown) => Promise<unknown>;
   openDialog: (params?: unknown) => Promise<unknown>;
   listComposeServices: () => Promise<unknown>;
+  updateConfig: (params: unknown) => Promise<unknown>;
 };
 
 type TerminalAPI = {
@@ -66,6 +67,7 @@ contextBridge.exposeInMainWorld("projectAPI", {
   openPath: (params) => invoke("project:openPath", params),
   openDialog: (params) => invoke("project:openDialog", params),
   listComposeServices: () => invoke("project:listComposeServices"),
+  updateConfig: (params) => invoke("project:updateConfig", params),
 } satisfies ProjectAPI);
 
 contextBridge.exposeInMainWorld("terminalAPI", {
