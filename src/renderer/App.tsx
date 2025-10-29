@@ -179,6 +179,7 @@ function App(): JSX.Element {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [activeProjectName, setActiveProjectName] = useState<string>("");
+  const [openProjectsInNewWindow, setOpenProjectsInNewWindow] = useState(false);
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>([]);
   const [activeWorkspacePath, setActiveWorkspacePath] = useState<string | null>(null);
@@ -198,6 +199,10 @@ function App(): JSX.Element {
     setTimeout(() => {
       setToastList((prev) => prev.filter((toast) => toast.id !== id));
     }, kind === "error" ? 5600 : 4200);
+  }, []);
+
+  const handleToggleNewWindow = useCallback((value: boolean) => {
+    setOpenProjectsInNewWindow(value);
   }, []);
 
   const reopenWorkspaceTab = useCallback(
@@ -269,14 +274,30 @@ function App(): JSX.Element {
   );
 
   const openProjectByPath = useCallback(
-    async (path: string, options: { silent?: boolean } = {}) => {
-      const { silent = false } = options;
+    async (path: string, options: { silent?: boolean; openInNewWindow?: boolean } = {}) => {
+      const { silent = false, openInNewWindow = false } = options;
       const trimmed = path.trim();
       if (!trimmed) {
         return;
       }
       try {
-        const state = await window.projectAPI.openPath({ path: trimmed });
+        const state = await window.projectAPI.openPath({ path: trimmed, openInNewWindow });
+        if (openInNewWindow) {
+          if (state) {
+            setRecentProjects((current) => {
+              const updated = upsertRecentProject(current, {
+                path: state.projectPath,
+                name: state.projectName,
+              });
+              persistRecentProjects(updated);
+              return updated;
+            });
+            if (!silent) {
+              pushToast(`Project opened in new window: ${state.projectName}`, "success");
+            }
+          }
+          return;
+        }
         if (!state) {
           return;
         }
@@ -292,9 +313,24 @@ function App(): JSX.Element {
     [applyProjectState, pushToast],
   );
 
-  const openProjectWithDialog = useCallback(async () => {
+  const openProjectWithDialog = useCallback(async (options: { openInNewWindow?: boolean } = {}) => {
+    const { openInNewWindow = false } = options;
     try {
-      const state = await window.projectAPI.openDialog();
+      const state = await window.projectAPI.openDialog({ openInNewWindow });
+      if (openInNewWindow) {
+        if (state) {
+          setRecentProjects((current) => {
+            const updated = upsertRecentProject(current, {
+              path: state.projectPath,
+              name: state.projectName,
+            });
+            persistRecentProjects(updated);
+            return updated;
+          });
+          pushToast(`Project opened in new window: ${state.projectName}`, "success");
+        }
+        return;
+      }
       if (!state) {
         return;
       }
@@ -763,17 +799,22 @@ function App(): JSX.Element {
 
   const handleProjectSelect = useCallback(
     (path: string) => {
-      if (!path || path === activeProjectPath) {
+      const trimmed = path.trim();
+      if (!trimmed) {
         return;
       }
-      void openProjectByPath(path);
+      const sameAsActive = trimmed === activeProjectPath;
+      if (!openProjectsInNewWindow && sameAsActive) {
+        return;
+      }
+      void openProjectByPath(trimmed, { openInNewWindow: openProjectsInNewWindow });
     },
-    [activeProjectPath, openProjectByPath],
+    [activeProjectPath, openProjectByPath, openProjectsInNewWindow],
   );
 
   const handleOpenProjectDialog = useCallback(() => {
-    void openProjectWithDialog();
-  }, [openProjectWithDialog]);
+    void openProjectWithDialog({ openInNewWindow: openProjectsInNewWindow });
+  }, [openProjectWithDialog, openProjectsInNewWindow]);
 
   const restoreWorkspacesFromStore = useCallback(
     async (workspaceList: WorkspaceSummary[]) => {
@@ -1105,6 +1146,8 @@ function App(): JSX.Element {
           onBaseChange: setBaseInput,
           onSubmit: handleCreateWorkspace,
         }}
+        openProjectsInNewWindow={openProjectsInNewWindow}
+        onToggleNewWindow={handleToggleNewWindow}
       />
 
       <main className="content-shell">

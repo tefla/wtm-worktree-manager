@@ -1,7 +1,7 @@
 import { webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { terminalSessionStore, TerminalState, WorkspaceTerminalState } from "./terminalSessionStore";
+import { TerminalSessionStore, TerminalState, WorkspaceTerminalState } from "./terminalSessionStore";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 let pty: typeof import("node-pty") | undefined;
@@ -68,11 +68,11 @@ export interface EnsureSessionResult {
   lastSignal: string | null;
 }
 
-class TerminalManager {
+export class TerminalManager {
   private sessions: Map<string, TerminalSession>;
   private workspaceIndex: Map<string, Map<string, string>>;
 
-  constructor() {
+  constructor(private readonly store: TerminalSessionStore) {
     this.sessions = new Map();
     this.workspaceIndex = new Map();
   }
@@ -88,7 +88,7 @@ class TerminalManager {
     const shellCommand = command ?? process.env.SHELL ?? "zsh";
     const shellArgs = Array.isArray(args) ? args : null;
 
-    const savedWorkspace = await terminalSessionStore.getWorkspaceState(absPath);
+    const savedWorkspace = await this.store.getWorkspaceState(absPath);
     const savedTerminal = savedWorkspace.terminals?.[slot] ?? null;
 
     const slotIndex = this.workspaceIndex.get(absPath);
@@ -125,7 +125,7 @@ class TerminalManager {
       webContentsId,
     );
 
-    await terminalSessionStore.ensureTerminal(absPath, slot, { label });
+    await this.store.ensureTerminal(absPath, slot, { label });
 
     const session = this.sessions.get(result.sessionId);
     if (session && savedTerminal) {
@@ -225,7 +225,7 @@ class TerminalManager {
       data,
     });
 
-    void terminalSessionStore.appendHistory(session.workspacePath, session.slot, data);
+    void this.store.appendHistory(session.workspacePath, session.slot, data);
   }
 
   private async handleExit(sessionId: string, event: { exitCode?: number | null; signal?: number | string | null }) {
@@ -244,7 +244,7 @@ class TerminalManager {
       });
     }
 
-    await terminalSessionStore.markExit(session.workspacePath, session.slot, event?.exitCode ?? null, event?.signal as string);
+    await this.store.markExit(session.workspacePath, session.slot, event?.exitCode ?? null, event?.signal as string);
     this.dispose(sessionId, { skipPersist: true }).catch((error) => {
       console.error("Failed to dispose terminal session", error);
     });
@@ -267,7 +267,7 @@ class TerminalManager {
     }
 
     if (!options.skipPersist) {
-      await terminalSessionStore.clearTerminal(session.workspacePath, session.slot);
+      await this.store.clearTerminal(session.workspacePath, session.slot);
     }
   }
 
@@ -283,29 +283,40 @@ class TerminalManager {
     session.pty.write(data);
   }
 
+  async disposeSessionsForWebContents(webContentsId: number): Promise<void> {
+    const targets = Array.from(this.sessions.values()).filter(
+      (session) => session.webContentsId === webContentsId,
+    );
+    for (const session of targets) {
+      try {
+        await this.dispose(session.id);
+      } catch (error) {
+        console.error("Failed to dispose terminal session for closed window", error);
+      }
+    }
+  }
+
   async listSessionsForWorkspace(workspacePath: string): Promise<Record<string, TerminalState>> {
-    return terminalSessionStore.listSessionsForWorkspace(workspacePath);
+    return this.store.listSessionsForWorkspace(workspacePath);
   }
 
   async getWorkspaceState(workspacePath: string): Promise<WorkspaceTerminalState> {
-    return terminalSessionStore.getWorkspaceState(workspacePath);
+    return this.store.getWorkspaceState(workspacePath);
   }
 
   async listSavedWorkspaces(): Promise<string[]> {
-    return terminalSessionStore.listWorkspaces();
+    return this.store.listWorkspaces();
   }
 
   async markQuickCommandExecuted(workspacePath: string, slot: string): Promise<void> {
-    await terminalSessionStore.markQuickCommandExecuted(workspacePath, slot);
+    await this.store.markQuickCommandExecuted(workspacePath, slot);
   }
 
   async setActiveTerminal(workspacePath: string, slot: string | null): Promise<void> {
-    await terminalSessionStore.setActiveTerminalSlot(workspacePath, slot);
+    await this.store.setActiveTerminalSlot(workspacePath, slot);
   }
 
   async clearWorkspaceState(workspacePath: string): Promise<void> {
-    await terminalSessionStore.clearWorkspaceState(workspacePath);
+    await this.store.clearWorkspaceState(workspacePath);
   }
 }
-
-export const terminalManager = new TerminalManager();

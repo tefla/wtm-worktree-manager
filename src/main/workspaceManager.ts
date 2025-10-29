@@ -545,5 +545,3 @@ export class WorkspaceManager {
     return this.buildWorkspace(entry);
   }
 }
-
-export const workspaceManager = new WorkspaceManager();

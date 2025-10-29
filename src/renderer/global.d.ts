@@ -11,8 +11,8 @@ declare global {
     };
     projectAPI: {
       getCurrent: () => Promise<ProjectState | null>;
-      openPath: (params: { path: string }) => Promise<ProjectState | null>;
-      openDialog: () => Promise<ProjectState | null>;
+      openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
+      openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
     };
     terminalAPI: {
       ensureSession: (params: { workspacePath: string; slot: string; command?: string; args?: string[]; cols?: number; rows?: number; env?: Record<string, string>; label?: string }) => Promise<EnsureTerminalResponse>;

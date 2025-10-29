@@ -41,7 +41,7 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-class TerminalSessionStoreClass {
+export class TerminalSessionStore {
   filePath: string;
   data: TerminalStoreData | null;
   saveTimer: ReturnType<typeof setTimeout> | null;
@@ -299,6 +299,3 @@ class TerminalSessionStoreClass {
     await this.clearWorkspace(workspacePath);
   }
 }
-
-export const terminalSessionStore = new TerminalSessionStoreClass();
-export type TerminalSessionStore = TerminalSessionStoreClass;

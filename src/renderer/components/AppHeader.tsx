@@ -11,6 +11,8 @@ interface AppHeaderProps {
   onOpenProject: () => void;
   onRefreshAll: () => void;
   createWorkspace: Omit<CreateWorkspaceFormProps, "variant">;
+  openProjectsInNewWindow: boolean;
+  onToggleNewWindow: (value: boolean) => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -23,10 +25,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenProject,
   onRefreshAll,
   createWorkspace,
+  openProjectsInNewWindow,
+  onToggleNewWindow,
 }) => {
   const hasProjects = recentProjects.length > 0;
   const selectValue = activeProjectPath ?? "";
   const showPlaceholder = !selectValue;
+
   return (
     <header className="app-header">
       <div className="header-row">
@@ -55,6 +60,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 </option>
               ))}
             </select>
+          </label>
+          <label className="header-toggle" htmlFor="project-open-new-window">
+            <input
+              id="project-open-new-window"
+              type="checkbox"
+              checked={openProjectsInNewWindow}
+              onChange={(event) => onToggleNewWindow(event.target.checked)}
+            />
+            <span>Open in new window</span>
           </label>
           <button className="ghost-button" type="button" onClick={onOpenProject}>
             Open…
