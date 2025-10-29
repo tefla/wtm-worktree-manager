@@ -41,7 +41,7 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-class TerminalSessionStoreClass {
+export class TerminalSessionStore {
   filePath: string;
   data: TerminalStoreData | null;
   saveTimer: ReturnType<typeof setTimeout> | null;
@@ -51,6 +51,30 @@ class TerminalSessionStoreClass {
     this.filePath = getStorePath(options.filePath ?? process.env.WTM_TERMINAL_STORE);
     this.data = null;
     this.saveTimer = null;
+    this.dirty = false;
+  }
+
+  async configure(options: TerminalSessionStoreOptions = {}): Promise<void> {
+    const nextPath = getStorePath(options.filePath ?? process.env.WTM_TERMINAL_STORE);
+    if (nextPath === this.filePath) {
+      return;
+    }
+
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+
+    if (this.dirty) {
+      try {
+        await this.flush();
+      } catch (error) {
+        console.error("Failed to persist terminal sessions before reconfiguration", error);
+      }
+    }
+
+    this.filePath = nextPath;
+    this.data = null;
     this.dirty = false;
   }
 
@@ -275,6 +299,3 @@ class TerminalSessionStoreClass {
     await this.clearWorkspace(workspacePath);
   }
 }
-
-export const terminalSessionStore = new TerminalSessionStoreClass();
-export type TerminalSessionStore = TerminalSessionStoreClass;

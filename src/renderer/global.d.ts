@@ -1,11 +1,4 @@
-import type {
-  EnsureTerminalResponse,
-  SettingsResponse,
-  TerminalDataPayload,
-  TerminalExitPayload,
-  WorkspaceStateResponse,
-  WorkspaceSummary,
-} from "./types";
+import type { EnsureTerminalResponse, ProjectState, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
 import type { JiraTicketSummary } from "../shared/jira";
 
 declare global {
@@ -18,9 +11,10 @@ declare global {
       update: (params: { path: string }) => Promise<WorkspaceSummary>;
       listBranches: () => Promise<{ local: string[]; remote: string[] }>;
     };
-    settingsAPI: {
-      listEnvironments: () => Promise<SettingsResponse>;
-      setActiveEnvironment: (params: { name: string }) => Promise<SettingsResponse & { environment: { name: string; repoDir: string; workspaceRoot: string } }>;
+    projectAPI: {
+      getCurrent: () => Promise<ProjectState | null>;
+      openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
+      openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
     };
     terminalAPI: {
       ensureSession: (params: { workspacePath: string; slot: string; command?: string; args?: string[]; cols?: number; rows?: number; env?: Record<string, string>; label?: string }) => Promise<EnsureTerminalResponse>;

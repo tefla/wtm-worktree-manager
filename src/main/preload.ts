@@ -11,9 +11,10 @@ type WorkspaceAPI = {
   listBranches: () => Promise<unknown>;
 };
 
-type SettingsAPI = {
-  listEnvironments: () => Promise<unknown>;
-  setActiveEnvironment: (params: unknown) => Promise<unknown>;
+type ProjectAPI = {
+  getCurrent: () => Promise<unknown>;
+  openPath: (params: unknown) => Promise<unknown>;
+  openDialog: (params?: unknown) => Promise<unknown>;
 };
 
 type TerminalAPI = {
@@ -54,10 +55,11 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
   listBranches: () => invoke("workspace:listBranches"),
 } satisfies WorkspaceAPI);
 
-contextBridge.exposeInMainWorld("settingsAPI", {
-  listEnvironments: () => invoke("settings:listEnvironments"),
-  setActiveEnvironment: (params) => invoke("settings:setActiveEnvironment", params),
-} satisfies SettingsAPI);
+contextBridge.exposeInMainWorld("projectAPI", {
+  getCurrent: () => invoke("project:getCurrent"),
+  openPath: (params) => invoke("project:openPath", params),
+  openDialog: (params) => invoke("project:openDialog", params),
+} satisfies ProjectAPI);
 
 contextBridge.exposeInMainWorld("terminalAPI", {
   ensureSession: (params) => invoke("terminal:ensure", params),
@@ -82,7 +84,7 @@ contextBridge.exposeInMainWorld("jiraAPI", {
 declare global {
   interface Window {
     workspaceAPI: WorkspaceAPI;
-    settingsAPI: SettingsAPI;
+    projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
     jiraAPI: JiraAPI;
   }

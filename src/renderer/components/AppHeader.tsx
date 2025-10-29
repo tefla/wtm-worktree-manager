@@ -1,58 +1,90 @@
 import React from "react";
-import type { SettingsResponse } from "../types";
+import { CreateWorkspaceForm, CreateWorkspaceFormProps } from "./CreateWorkspaceForm";
 
 interface AppHeaderProps {
   title: string;
   subtitle: string;
-  environments: SettingsResponse["environments"];
-  activeEnvironment: string;
+  recentProjects: Array<{ path: string; label: string }>;
+  activeProjectPath: string | null;
   refreshing: boolean;
-  onEnvironmentChange: (name: string) => void;
+  onSelectProject: (path: string) => void;
+  onOpenProject: () => void;
   onRefreshAll: () => void;
+  createWorkspace: Omit<CreateWorkspaceFormProps, "variant">;
+  openProjectsInNewWindow: boolean;
+  onToggleNewWindow: (value: boolean) => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   title,
   subtitle,
-  environments,
-  activeEnvironment,
+  recentProjects,
+  activeProjectPath,
   refreshing,
-  onEnvironmentChange,
+  onSelectProject,
+  onOpenProject,
   onRefreshAll,
+  createWorkspace,
+  openProjectsInNewWindow,
+  onToggleNewWindow,
 }) => {
-  const environmentEntries = Object.entries(environments);
+  const hasProjects = recentProjects.length > 0;
+  const selectValue = activeProjectPath ?? "";
+  const showPlaceholder = !selectValue;
+
   return (
     <header className="app-header">
-      <div className="header-text">
-        <h1>{title}</h1>
-        <p>{subtitle}</p>
-      </div>
-      <div className="header-actions">
-        <label className="environment-switcher">
-          <span>Environment</span>
-          <select
-            id="environment-select"
-            name="environment"
-            value={activeEnvironment}
-            onChange={(event) => onEnvironmentChange(event.target.value)}
+      <div className="header-row">
+        <div className="header-text">
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
+        <div className="header-actions">
+          <label className="environment-switcher">
+            <span>Project</span>
+            <select
+              id="project-select"
+              name="project"
+              value={selectValue}
+              onChange={(event) => onSelectProject(event.target.value)}
+              disabled={!hasProjects}
+            >
+              {showPlaceholder && (
+                <option value="" disabled>
+                  Select a project
+                </option>
+              )}
+              {recentProjects.map((project) => (
+                <option key={project.path} value={project.path}>
+                  {project.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="header-toggle" htmlFor="project-open-new-window">
+            <input
+              id="project-open-new-window"
+              type="checkbox"
+              checked={openProjectsInNewWindow}
+              onChange={(event) => onToggleNewWindow(event.target.checked)}
+            />
+            <span>Open in new window</span>
+          </label>
+          <button className="ghost-button" type="button" onClick={onOpenProject}>
+            Open…
+          </button>
+          <button
+            id="refresh-button"
+            className="accent-button"
+            type="button"
+            onClick={onRefreshAll}
+            disabled={refreshing}
           >
-            {environmentEntries.map(([name]) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          id="refresh-button"
-          className="accent-button"
-          type="button"
-          onClick={onRefreshAll}
-          disabled={refreshing}
-        >
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
+      <CreateWorkspaceForm {...createWorkspace} variant="inline" />
     </header>
   );
 };

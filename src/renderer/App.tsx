@@ -2,9 +2,9 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
-import { CreateWorkspaceForm, type BranchSuggestion } from "./components/CreateWorkspaceForm";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
+import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
   TerminalDefinition,
   SavedTerminalState,
@@ -15,8 +15,8 @@ import type {
 import { cx } from "./utils/cx";
 import type {
   EnsureTerminalResponse,
+  ProjectState,
   QuickAccessEntry,
-  SettingsResponse,
   TerminalDataPayload,
   TerminalExitPayload,
   WorkspaceStateResponse,
@@ -44,6 +44,13 @@ interface TerminalRuntime {
   resizeObserver: ResizeObserver;
   container: HTMLDivElement;
 }
+
+interface RecentProject {
+  path: string;
+  name: string;
+}
+
+const RECENT_PROJECTS_STORAGE_KEY = "wtm:recent-projects";
 
 const TERMINAL_HISTORY_LIMIT = 40000;
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "SFMono-Regular", monospace';
@@ -121,6 +128,51 @@ function ensureSavedWorkspaceState(workspacePath: string, saved?: WorkspaceState
   };
 }
 
+function loadRecentProjectsFromStorage(): RecentProject[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const entries: RecentProject[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const path = typeof (item as RecentProject).path === "string" ? (item as RecentProject).path.trim() : "";
+      if (!path) {
+        continue;
+      }
+      const name = typeof (item as RecentProject).name === "string" ? (item as RecentProject).name.trim() : "";
+      entries.push({ path, name: name || path });
+    }
+    return entries;
+  } catch (error) {
+    console.error("Failed to load recent projects", error);
+    return [];
+  }
+}
+
+function persistRecentProjects(projects: RecentProject[]): void {
+  try {
+    window.localStorage.setItem(
+      RECENT_PROJECTS_STORAGE_KEY,
+      JSON.stringify(projects.slice(0, 8)),
+    );
+  } catch (error) {
+    console.error("Failed to persist recent projects", error);
+  }
+}
+
+function upsertRecentProject(projects: RecentProject[], entry: RecentProject): RecentProject[] {
+  const unique = projects.filter((item) => item.path !== entry.path);
+  return [entry, ...unique].slice(0, 8);
+}
+
 function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
@@ -131,14 +183,17 @@ function App(): JSX.Element {
   const [createInFlight, setCreateInFlight] = useState(false);
   const [jiraTickets, setJiraTickets] = useState<JiraTicketSummary[]>([]);
   const [branchCatalog, setBranchCatalog] = useState<{ local: string[]; remote: string[] }>({ local: [], remote: [] });
-  const [environments, setEnvironments] = useState<SettingsResponse["environments"]>({});
-  const [activeEnvironment, setActiveEnvironment] = useState<string>("");
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState<string>("");
+  const [openProjectsInNewWindow, setOpenProjectsInNewWindow] = useState(false);
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>([]);
   const [activeWorkspacePath, setActiveWorkspacePath] = useState<string | null>(null);
   const workspaceTabsRef = useRef<Map<string, WorkspaceTabState>>(new Map());
   const sessionIndexRef = useRef<Map<string, SessionIndexEntry>>(new Map());
   const runtimeRef = useRef<Map<string, TerminalRuntime>>(new Map());
+  const previousProjectPathRef = useRef<string | null>(null);
   const [toastList, setToastList] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
@@ -151,6 +206,10 @@ function App(): JSX.Element {
     setTimeout(() => {
       setToastList((prev) => prev.filter((toast) => toast.id !== id));
     }, kind === "error" ? 5600 : 4200);
+  }, []);
+
+  const handleToggleNewWindow = useCallback((value: boolean) => {
+    setOpenProjectsInNewWindow(value);
   }, []);
 
   const reopenWorkspaceTab = useCallback(
@@ -166,6 +225,12 @@ function App(): JSX.Element {
   );
 
   const loadWorkspaces = useCallback(async (): Promise<WorkspaceSummary[]> => {
+    if (!activeProjectPath) {
+      setWorkspaces([]);
+      setActiveWorkspacePath(null);
+      setLoadingWorkspaces(false);
+      return [];
+    }
     setLoadingWorkspaces(true);
     let list: WorkspaceSummary[] = [];
     try {
@@ -182,29 +247,23 @@ function App(): JSX.Element {
         return list[0].path;
       });
     } catch (error) {
-      console.error("Failed to load workspaces", error);
-      pushToast("Failed to load workspaces", "error");
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("No project configured")) {
+        // User has not selected a project yet; avoid spamming toasts.
+        setWorkspaces([]);
+        setActiveWorkspacePath(null);
+      } else {
+        console.error("Failed to load workspaces", error);
+        pushToast("Failed to load workspaces", "error");
+      }
     } finally {
       setLoadingWorkspaces(false);
     }
     return list;
-  }, [pushToast, reopenWorkspaceTab]);
-
-  const loadSettings = useCallback(async () => {
-    try {
-      const response = await window.settingsAPI.listEnvironments();
-      setEnvironments(response.environments);
-      setActiveEnvironment(response.activeEnvironment);
-      const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
-      defaultTerminalsRef.current = normalized;
-    } catch (error) {
-      console.error("Failed to load settings", error);
-      pushToast("Failed to load settings", "error");
-    }
-  }, [pushToast]);
+  }, [activeProjectPath, pushToast, reopenWorkspaceTab]);
 
   const loadBranches = useCallback(async () => {
-    if (!window.workspaceAPI?.listBranches) {
+    if (!activeProjectPath || !window.workspaceAPI?.listBranches) {
       setBranchCatalog({ local: [], remote: [] });
       return;
     }
@@ -226,11 +285,13 @@ function App(): JSX.Element {
       });
     } catch (error) {
       console.warn("Failed to load branch catalog", error);
+      setBranchCatalog({ local: [], remote: [] });
     }
-  }, []);
+  }, [activeProjectPath]);
 
   const loadJiraTickets = useCallback(async (options: { forceRefresh?: boolean } = {}) => {
     if (!window.jiraAPI?.listTickets) {
+      setJiraTickets([]);
       return;
     }
     try {
@@ -247,10 +308,7 @@ function App(): JSX.Element {
         }
         const key = ticket.key.toUpperCase();
         const summary = ticket.summary.trim();
-        if (!summary) {
-          continue;
-        }
-        if (seenKeys.has(key)) {
+        if (!summary || seenKeys.has(key)) {
           continue;
         }
         seenKeys.add(key);
@@ -266,6 +324,93 @@ function App(): JSX.Element {
       console.warn("Failed to load Jira ticket cache", error);
     }
   }, []);
+
+  const applyProjectState = useCallback(
+    (state: ProjectState, options: { persistRecent?: boolean } = {}) => {
+      const { persistRecent = true } = options;
+      const normalizedQuickAccess = normaliseQuickAccessList(state.quickAccess, { fallbackToDefault: true });
+      defaultTerminalsRef.current = normalizedQuickAccess;
+      setActiveProjectName(state.projectName);
+      setActiveProjectPath((current) => (current === state.projectPath ? current : state.projectPath));
+      if (persistRecent) {
+        setRecentProjects((current) => {
+          const updated = upsertRecentProject(current, { path: state.projectPath, name: state.projectName });
+          persistRecentProjects(updated);
+          return updated;
+        });
+      }
+    },
+    [],
+  );
+
+  const openProjectByPath = useCallback(
+    async (path: string, options: { silent?: boolean; openInNewWindow?: boolean } = {}) => {
+      const { silent = false, openInNewWindow = false } = options;
+      const trimmed = path.trim();
+      if (!trimmed) {
+        return;
+      }
+      try {
+        const state = await window.projectAPI.openPath({ path: trimmed, openInNewWindow });
+        if (openInNewWindow) {
+          if (state) {
+            setRecentProjects((current) => {
+              const updated = upsertRecentProject(current, {
+                path: state.projectPath,
+                name: state.projectName,
+              });
+              persistRecentProjects(updated);
+              return updated;
+            });
+            if (!silent) {
+              pushToast(`Project opened in new window: ${state.projectName}`, "success");
+            }
+          }
+          return;
+        }
+        if (!state) {
+          return;
+        }
+        applyProjectState(state);
+        if (!silent) {
+          pushToast(`Project opened: ${state.projectName}`, "success");
+        }
+      } catch (error) {
+        console.error("Failed to open project", error);
+        pushToast("Failed to open project", "error");
+      }
+    },
+    [applyProjectState, pushToast],
+  );
+
+  const openProjectWithDialog = useCallback(async (options: { openInNewWindow?: boolean } = {}) => {
+    const { openInNewWindow = false } = options;
+    try {
+      const state = await window.projectAPI.openDialog({ openInNewWindow });
+      if (openInNewWindow) {
+        if (state) {
+          setRecentProjects((current) => {
+            const updated = upsertRecentProject(current, {
+              path: state.projectPath,
+              name: state.projectName,
+            });
+            persistRecentProjects(updated);
+            return updated;
+          });
+          pushToast(`Project opened in new window: ${state.projectName}`, "success");
+        }
+        return;
+      }
+      if (!state) {
+        return;
+      }
+      applyProjectState(state);
+      pushToast(`Project opened: ${state.projectName}`, "success");
+    } catch (error) {
+      console.error("Failed to open project via dialog", error);
+      pushToast("Failed to open project", "error");
+    }
+  }, [applyProjectState, pushToast]);
 
   const generateEphemeralLabel = useCallback((workspaceState: WorkspaceTabState): string => {
     const label = `Terminal ${workspaceState.ephemeralCounter}`;
@@ -372,6 +517,21 @@ function App(): JSX.Element {
     },
     [],
   );
+
+  const clearAllWorkspaces = useCallback(() => {
+    workspaceTabsRef.current.forEach((state, path) => {
+      state.terminals.forEach((record) => {
+        disposeTerminalRuntime(path, record, true);
+      });
+    });
+    workspaceTabsRef.current.clear();
+    sessionIndexRef.current.clear();
+    runtimeRef.current.clear();
+    setWorkspaceOrder([]);
+    setActiveWorkspacePath(null);
+    setWorkspaces([]);
+    setUpdatingWorkspaces({});
+  }, [disposeTerminalRuntime]);
 
   const setActiveTerminal = useCallback(
     (workspaceState: WorkspaceTabState, terminalKey: string | null) => {
@@ -707,35 +867,24 @@ function App(): JSX.Element {
     [activeWorkspacePath, disposeTerminalRuntime, workspaceOrder],
   );
 
-  const handleEnvironmentChange = useCallback(
-    async (name: string) => {
-      if (!name || name === activeEnvironment) {
+  const handleProjectSelect = useCallback(
+    (path: string) => {
+      const trimmed = path.trim();
+      if (!trimmed) {
         return;
       }
-      try {
-        const response = await window.settingsAPI.setActiveEnvironment({ name });
-        setEnvironments(response.environments);
-        setActiveEnvironment(response.activeEnvironment);
-        const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
-        defaultTerminalsRef.current = normalized;
-        await loadJiraTickets({ forceRefresh: true });
-
-        workspaceTabsRef.current.forEach((state, path) => {
-          closeWorkspace(path, { preserveState: true });
-        });
-        workspaceTabsRef.current.clear();
-        setWorkspaceOrder([]);
-        setActiveWorkspacePath(null);
-        pushToast(`Switched to ${name}`, "success");
-        await loadWorkspaces();
-        await loadBranches();
-      } catch (error) {
-        console.error("Failed to switch environment", error);
-        pushToast("Failed to switch environment", "error");
+      const sameAsActive = trimmed === activeProjectPath;
+      if (!openProjectsInNewWindow && sameAsActive) {
+        return;
       }
+      void openProjectByPath(trimmed, { openInNewWindow: openProjectsInNewWindow });
     },
-    [activeEnvironment, closeWorkspace, loadBranches, loadJiraTickets, loadWorkspaces, pushToast],
+    [activeProjectPath, openProjectByPath, openProjectsInNewWindow],
   );
+
+  const handleOpenProjectDialog = useCallback(() => {
+    void openProjectWithDialog({ openInNewWindow: openProjectsInNewWindow });
+  }, [openProjectWithDialog, openProjectsInNewWindow]);
 
   const restoreWorkspacesFromStore = useCallback(
     async (workspaceList: WorkspaceSummary[]) => {
@@ -802,20 +951,8 @@ function App(): JSX.Element {
         pushToast("Branch name is required", "error");
         return;
       }
-      const existingWorkspace = workspaces.find(
-        (item) =>
-          item.kind === "worktree" &&
-          (item.branch === branch || item.relativePath === branch || item.path === branch),
-      );
-      if (existingWorkspace) {
-        pushToast(
-          `Workspace '${existingWorkspace.branch ?? existingWorkspace.relativePath}' already exists`,
-          "success",
-        );
-        autoBaseRefRef.current = null;
-        setBranchInput("");
-        setBaseInput("");
-        await handleWorkspaceSelect(existingWorkspace);
+      if (!activeProjectPath) {
+        pushToast("Open a project before creating workspaces", "error");
         return;
       }
       setCreateInFlight(true);
@@ -825,9 +962,9 @@ function App(): JSX.Element {
           baseRef: baseRef || undefined,
         });
         pushToast(`Workspace '${workspace.branch ?? workspace.relativePath}' ready`, "success");
-        autoBaseRefRef.current = null;
         setBranchInput("");
         setBaseInput("");
+        autoBaseRefRef.current = null;
         await loadWorkspaces();
         await loadBranches();
         await handleWorkspaceSelect(workspace);
@@ -838,12 +975,16 @@ function App(): JSX.Element {
         setCreateInFlight(false);
       }
     },
-    [baseInput, branchInput, handleWorkspaceSelect, loadBranches, loadWorkspaces, pushToast, workspaces],
+    [activeProjectPath, baseInput, branchInput, handleWorkspaceSelect, loadBranches, loadWorkspaces, pushToast],
   );
 
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
+      if (!activeProjectPath) {
+        pushToast("Open a project first", "info");
+        return;
+      }
       await loadWorkspaces();
       await loadBranches();
       await loadJiraTickets({ forceRefresh: true });
@@ -851,7 +992,7 @@ function App(): JSX.Element {
     } finally {
       setRefreshing(false);
     }
-  }, [loadBranches, loadJiraTickets, loadWorkspaces, pushToast]);
+  }, [activeProjectPath, loadBranches, loadJiraTickets, loadWorkspaces, pushToast]);
 
   const handleRefreshWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
@@ -925,16 +1066,50 @@ function App(): JSX.Element {
   );
 
   useEffect(() => {
+    const stored = loadRecentProjectsFromStorage();
+    setRecentProjects(stored);
     void (async () => {
-      await loadSettings();
-      const list = await loadWorkspaces();
-      await Promise.all([restoreWorkspacesFromStore(list), loadBranches()]);
+      try {
+        const current = await window.projectAPI.getCurrent();
+        if (current) {
+          applyProjectState(current, { persistRecent: true });
+          return;
+        }
+        if (stored.length > 0) {
+          await openProjectByPath(stored[0].path, { silent: true });
+        }
+      } catch (error) {
+        console.error("Failed to initialise project", error);
+      }
     })();
-  }, [loadBranches, loadSettings, loadWorkspaces, restoreWorkspacesFromStore]);
+  }, [applyProjectState, openProjectByPath]);
 
   useEffect(() => {
+    if (previousProjectPathRef.current && previousProjectPathRef.current !== activeProjectPath) {
+      clearAllWorkspaces();
+    }
+    previousProjectPathRef.current = activeProjectPath;
+  }, [activeProjectPath, clearAllWorkspaces]);
+
+  useEffect(() => {
+    if (!activeProjectPath) {
+      return;
+    }
+    void (async () => {
+      const list = await loadWorkspaces();
+      await restoreWorkspacesFromStore(list);
+    })();
+  }, [activeProjectPath, loadWorkspaces, restoreWorkspacesFromStore]);
+
+  useEffect(() => {
+    if (!activeProjectPath) {
+      setBranchCatalog({ local: [], remote: [] });
+      setJiraTickets([]);
+      return;
+    }
+    void loadBranches();
     void loadJiraTickets();
-  }, [activeEnvironment, loadJiraTickets]);
+  }, [activeProjectPath, loadBranches, loadJiraTickets]);
 
   useEffect(() => {
     const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
@@ -1216,26 +1391,42 @@ function App(): JSX.Element {
     [workspaces],
   );
 
+  const headerProjects = useMemo(
+    () =>
+      recentProjects.map((project) => ({
+        path: project.path,
+        label: project.name && project.name !== project.path ? `${project.name} (${project.path})` : project.path,
+      })),
+    [recentProjects],
+  );
+
+  const headerSubtitle = activeProjectPath
+    ? `Project: ${activeProjectName || activeProjectPath}`
+    : "Open a project to manage its worktrees";
+
   return (
     <div className="app-shell">
       <AppHeader
         title="WTM (WorkTree Manager)"
-        subtitle="Manage git worktrees for your project repositories"
-        environments={environments}
-        activeEnvironment={activeEnvironment}
+        subtitle={headerSubtitle}
+        recentProjects={headerProjects}
+        activeProjectPath={activeProjectPath}
         refreshing={refreshing}
-        onEnvironmentChange={handleEnvironmentChange}
+        onSelectProject={handleProjectSelect}
+        onOpenProject={handleOpenProjectDialog}
         onRefreshAll={handleRefreshAll}
-      />
-
-      <CreateWorkspaceForm
-        branchInput={branchInput}
-        baseInput={baseInput}
-        createInFlight={createInFlight}
-        branchSuggestions={branchSuggestions}
-        onBranchChange={handleBranchChange}
-        onBaseChange={handleBaseChange}
-        onSubmit={handleCreateWorkspace}
+        createWorkspace={{
+          branchInput,
+          baseInput,
+          createInFlight,
+          disabled: !activeProjectPath,
+          onBranchChange: handleBranchChange,
+          onBaseChange: handleBaseChange,
+          onSubmit: handleCreateWorkspace,
+          branchSuggestions,
+        }}
+        openProjectsInNewWindow={openProjectsInNewWindow}
+        onToggleNewWindow={handleToggleNewWindow}
       />
 
       <main className="content-shell">
