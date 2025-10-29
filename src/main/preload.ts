@@ -22,6 +22,7 @@ type TerminalAPI = {
   write: (sessionId: string, data: string) => void;
   resize: (sessionId: string, cols: number, rows: number) => Promise<unknown>;
   dispose: (sessionId: string, options?: unknown) => Promise<unknown>;
+  release: (sessionId: string) => Promise<unknown>;
   listForWorkspace: (workspacePath: string) => Promise<unknown>;
   getWorkspaceState: (workspacePath: string) => Promise<unknown>;
   listSavedWorkspaces: () => Promise<unknown>;
@@ -46,6 +47,10 @@ const addListener = (channel: string, callback: (payload: unknown) => void): Lis
   };
 };
 
+contextBridge.exposeInMainWorld("wtmEnv", {
+  e2eProjectPath: process.env.WTM_E2E_PROJECT_PATH ?? null,
+});
+
 contextBridge.exposeInMainWorld("workspaceAPI", {
   list: () => invoke("workspace:list"),
   create: (params) => invoke("workspace:create", params),
@@ -66,6 +71,7 @@ contextBridge.exposeInMainWorld("terminalAPI", {
   write: (sessionId, data) => ipcRenderer.send("terminal:write", { sessionId, data }),
   resize: (sessionId, cols, rows) => invoke("terminal:resize", { sessionId, cols, rows }),
   dispose: (sessionId, options) => invoke("terminal:dispose", { sessionId, options }),
+  release: (sessionId) => invoke("terminal:release", { sessionId }),
   listForWorkspace: (workspacePath) => invoke("terminal:listForWorkspace", { workspacePath }),
   getWorkspaceState: (workspacePath) => invoke("terminal:getWorkspaceState", { workspacePath }),
   listSavedWorkspaces: () => invoke("terminal:listSavedWorkspaces"),
@@ -87,5 +93,8 @@ declare global {
     projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
     jiraAPI: JiraAPI;
+    wtmEnv?: {
+      e2eProjectPath: string | null;
+    };
   }
 }

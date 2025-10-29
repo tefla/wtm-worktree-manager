@@ -508,9 +508,15 @@ function App(): JSX.Element {
       }
       if (record.sessionId) {
         sessionIndexRef.current.delete(record.sessionId);
-        void window.terminalAPI
-          .dispose(record.sessionId, { preserve: preserveSession })
-          .catch((error) => console.warn("Failed to dispose terminal", error));
+        if (preserveSession) {
+          void window.terminalAPI
+            .release(record.sessionId)
+            .catch((error) => console.warn("Failed to release terminal session", error));
+        } else {
+          void window.terminalAPI
+            .dispose(record.sessionId, { preserve: preserveSession })
+            .catch((error) => console.warn("Failed to dispose terminal", error));
+        }
         record.sessionId = null;
       }
       record.closed = true;
@@ -1073,6 +1079,11 @@ function App(): JSX.Element {
         const current = await window.projectAPI.getCurrent();
         if (current) {
           applyProjectState(current, { persistRecent: true });
+          return;
+        }
+        const automationProjectPath = window.wtmEnv?.e2eProjectPath ?? undefined;
+        if (automationProjectPath) {
+          await openProjectByPath(automationProjectPath, { silent: true });
           return;
         }
         if (stored.length > 0) {
