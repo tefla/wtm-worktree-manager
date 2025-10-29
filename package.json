@@ -1,6 +1,6 @@
 {
   "name": "wtm-worktree-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WTM (WorkTree Manager) desktop UI for managing git worktrees",
   "main": "dist/main/main.js",
   "scripts": {
