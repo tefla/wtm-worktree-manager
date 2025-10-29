@@ -44,7 +44,7 @@ function clone<T>(value: T): T {
 class TerminalSessionStoreClass {
   filePath: string;
   data: TerminalStoreData | null;
-  saveTimer: NodeJS.Timeout | null;
+  saveTimer: ReturnType<typeof setTimeout> | null;
   dirty: boolean;
 
   constructor(options: TerminalSessionStoreOptions = {}) {
