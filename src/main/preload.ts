@@ -13,7 +13,7 @@ type WorkspaceAPI = {
 type ProjectAPI = {
   getCurrent: () => Promise<unknown>;
   openPath: (params: unknown) => Promise<unknown>;
-  openDialog: () => Promise<unknown>;
+  openDialog: (params?: unknown) => Promise<unknown>;
 };
 
 type TerminalAPI = {
@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
 contextBridge.exposeInMainWorld("projectAPI", {
   getCurrent: () => invoke("project:getCurrent"),
   openPath: (params) => invoke("project:openPath", params),
-  openDialog: () => invoke("project:openDialog"),
+  openDialog: (params) => invoke("project:openDialog", params),
 } satisfies ProjectAPI);
 
 contextBridge.exposeInMainWorld("terminalAPI", {

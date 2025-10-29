@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { loadProjectConfig, ProjectConfig, QuickAccessEntry, saveProjectConfig, defaultProjectConfig } from "./projectConfig";
-import { workspaceManager } from "./workspaceManager";
-import { terminalSessionStore } from "./terminalSessionStore";
+import { WorkspaceManager } from "./workspaceManager";
+import { TerminalSessionStore } from "./terminalSessionStore";
 
 const WTM_FOLDER_NAME = ".wtm";
 const CONFIG_FILE_NAME = "config.json";
@@ -36,7 +36,10 @@ export class MissingProjectStructureError extends Error {
 export class ProjectManager {
   private current: ProjectContext | null;
 
-  constructor() {
+  constructor(
+    private readonly workspaceManager: WorkspaceManager,
+    private readonly terminalSessionStore: TerminalSessionStore,
+  ) {
     this.current = null;
   }
 
@@ -129,11 +132,11 @@ export class ProjectManager {
 
   private async applyContext(context: ProjectContext): Promise<void> {
     this.current = context;
-    workspaceManager.configure({
+    this.workspaceManager.configure({
       repoDir: context.projectPath,
       workspaceRoot: context.workspacesPath,
     });
-    await terminalSessionStore.configure({
+    await this.terminalSessionStore.configure({
       filePath: context.terminalsPath,
     });
   }
@@ -177,5 +180,3 @@ export class ProjectManager {
     };
   }
 }
-
-export const projectManager = new ProjectManager();

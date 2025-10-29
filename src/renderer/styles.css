@@ -93,6 +93,22 @@ code {
   gap: 8px;
 }
 
+.header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  user-select: none;
+}
+
+.header-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #38bdf8;
+}
+
 .environment-switcher {
   display: flex;
   flex-direction: column;
