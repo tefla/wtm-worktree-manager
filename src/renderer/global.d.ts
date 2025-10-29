@@ -19,6 +19,7 @@ declare global {
       write: (sessionId: string, data: string) => void;
       resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
       dispose: (sessionId: string, options?: Record<string, unknown>) => Promise<void>;
+      release: (sessionId: string) => Promise<void>;
       listForWorkspace: (workspacePath: string) => Promise<Record<string, { history: string }>>;
       getWorkspaceState: (workspacePath: string) => Promise<WorkspaceStateResponse>;
       listSavedWorkspaces: () => Promise<string[]>;

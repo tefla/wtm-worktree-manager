@@ -1,16 +1,7 @@
 import { webContents } from "electron";
-import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { TerminalHostClient } from "./terminalHostClient";
 import { TerminalSessionStore, TerminalState, WorkspaceTerminalState } from "./terminalSessionStore";
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-let pty: typeof import("node-pty") | undefined;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  pty = require("node-pty");
-} catch (error) {
-  console.error("Failed to load node-pty. Terminal features will be disabled until rebuilt.", error);
-}
 
 function resolveCommand(command: string): string {
   if (process.platform === "win32") {
@@ -32,15 +23,16 @@ function defaultShellArgs(commandPath: string): string[] {
   return ["-i"];
 }
 
-export interface TerminalSession {
+interface SessionBinding {
   id: string;
   workspacePath: string;
   slot: string;
   command: string;
   args: string[];
-  pty: import("node-pty").IPty;
-  webContentsId: number;
+  subscribers: Set<number>;
   quickCommandExecuted: boolean;
+  lastExitCode: number | null;
+  lastSignal: string | null;
   closed: boolean;
 }
 
@@ -69,12 +61,25 @@ export interface EnsureSessionResult {
 }
 
 export class TerminalManager {
-  private sessions: Map<string, TerminalSession>;
+  private sessions: Map<string, SessionBinding>;
   private workspaceIndex: Map<string, Map<string, string>>;
 
-  constructor(private readonly store: TerminalSessionStore) {
+  constructor(
+    private readonly store: TerminalSessionStore,
+    private readonly hostClient: TerminalHostClient,
+  ) {
     this.sessions = new Map();
     this.workspaceIndex = new Map();
+
+    this.hostClient.on("session-data", (payload) => {
+      void this.handleHostData(payload.sessionId, payload.data);
+    });
+    this.hostClient.on("session-exit", (payload) => {
+      void this.handleHostExit(payload.sessionId, payload.exitCode, payload.signal);
+    });
+    this.hostClient.on("session-disposed", (payload) => {
+      this.handleHostDisposed(payload.sessionId);
+    });
   }
 
   async ensureSession(params: EnsureSessionParams, webContentsId: number): Promise<EnsureSessionResult> {
@@ -85,213 +90,132 @@ export class TerminalManager {
     }
 
     const absPath = path.resolve(workspacePath);
-    const shellCommand = command ?? process.env.SHELL ?? "zsh";
-    const shellArgs = Array.isArray(args) ? args : null;
-
     const savedWorkspace = await this.store.getWorkspaceState(absPath);
     const savedTerminal = savedWorkspace.terminals?.[slot] ?? null;
+    const quickCommandExecuted = Boolean(savedTerminal?.quickCommandExecuted);
+    const lastExitCode = savedTerminal?.lastExitCode ?? null;
+    const lastSignal = savedTerminal?.lastSignal ?? null;
+    const previousHistory = savedTerminal?.history ?? "";
 
-    const slotIndex = this.workspaceIndex.get(absPath);
-    if (slotIndex?.has(slot)) {
-      const existingId = slotIndex.get(slot);
-      const existingSession = existingId ? this.sessions.get(existingId) : undefined;
-      if (existingSession && !existingSession.closed) {
-        existingSession.webContentsId = webContentsId;
-        return {
-          sessionId: existingSession.id,
-          workspacePath: absPath,
-          slot,
-          command: existingSession.command,
-          args: existingSession.args,
-          existing: true,
-          history: savedTerminal?.history ?? "",
-          quickCommandExecuted: Boolean(savedTerminal?.quickCommandExecuted),
-          lastExitCode: savedTerminal?.lastExitCode ?? null,
-          lastSignal: savedTerminal?.lastSignal ?? null,
-        };
-      }
-    }
-
-    const result = this.createSession(
-      {
-        workspacePath: absPath,
-        slot,
-        command: shellCommand,
-        args: shellArgs ?? undefined,
-        cols,
-        rows,
-        env,
-      },
-      webContentsId,
-    );
-
-    await this.store.ensureTerminal(absPath, slot, { label });
-
-    const session = this.sessions.get(result.sessionId);
-    if (session && savedTerminal) {
-      session.quickCommandExecuted = Boolean(savedTerminal.quickCommandExecuted);
-    }
-
-    return {
-      ...result,
-      history: savedTerminal?.history ?? "",
-      quickCommandExecuted: Boolean(savedTerminal?.quickCommandExecuted),
-      lastExitCode: savedTerminal?.lastExitCode ?? null,
-      lastSignal: savedTerminal?.lastSignal ?? null,
-    };
-  }
-
-  private createSession(
-    params: {
-      workspacePath: string;
-      slot: string;
-      command: string;
-      args?: string[];
-      cols: number;
-      rows: number;
-      env?: NodeJS.ProcessEnv;
-    },
-    webContentsId: number,
-  ) {
-    const { workspacePath, slot, command, args, cols, rows, env } = params;
-    if (!pty) {
-      throw new Error(
-        "Terminal support is unavailable. Rebuild native modules with `npm rebuild node-pty --runtime=electron --target=30.0.0`.",
-      );
-    }
-    const effectiveCommand = command ?? process.env.SHELL ?? "zsh";
-    const resolvedCommand = resolveCommand(effectiveCommand);
+    const resolvedCommand = resolveCommand(command ?? process.env.SHELL ?? "zsh");
     const resolvedArgs = Array.isArray(args) && args.length > 0 ? args : defaultShellArgs(resolvedCommand);
-    const sessionId = randomUUID();
 
-    const ptyProcess = pty.spawn(resolvedCommand, resolvedArgs, {
-      name: "xterm-color",
-      cols,
-      rows,
-      cwd: workspacePath,
-      env: {
-        ...process.env,
-        ...env,
-      },
-    });
-
-    const session: TerminalSession = {
-      id: sessionId,
-      workspacePath,
+    const hostResult = await this.hostClient.ensureSession({
+      workspacePath: absPath,
       slot,
       command: resolvedCommand,
       args: resolvedArgs,
-      pty: ptyProcess,
-      webContentsId,
-      quickCommandExecuted: false,
-      closed: false,
-    };
+      cols,
+      rows,
+      env,
+      label,
+    });
 
-    this.sessions.set(sessionId, session);
-    if (!this.workspaceIndex.has(workspacePath)) {
-      this.workspaceIndex.set(workspacePath, new Map());
+    const sessionId = hostResult.sessionId;
+
+    let binding = this.sessions.get(sessionId);
+    if (!binding) {
+      binding = {
+        id: sessionId,
+        workspacePath: absPath,
+        slot,
+        command: hostResult.command,
+        args: hostResult.args ?? [],
+        subscribers: new Set(),
+        quickCommandExecuted,
+        lastExitCode,
+        lastSignal,
+        closed: false,
+      };
+      this.sessions.set(sessionId, binding);
     }
-    this.workspaceIndex.get(workspacePath)?.set(slot, sessionId);
 
-    ptyProcess.onData((data: string) => {
-      this.emitData(sessionId, data);
-    });
+    binding.subscribers.add(webContentsId);
+    binding.closed = false;
+    binding.command = hostResult.command;
+    binding.args = hostResult.args ?? resolvedArgs;
+    binding.quickCommandExecuted = quickCommandExecuted;
+    binding.lastExitCode = lastExitCode;
+    binding.lastSignal = lastSignal;
 
-    ptyProcess.onExit((event) => {
-      this.handleExit(sessionId, event);
-    });
+    if (!this.workspaceIndex.has(absPath)) {
+      this.workspaceIndex.set(absPath, new Map());
+    }
+    this.workspaceIndex.get(absPath)?.set(slot, sessionId);
+
+    await this.store.ensureTerminal(absPath, slot, { label });
+
+    let history = previousHistory;
+    const pending = hostResult.pendingOutput ?? "";
+    if (pending) {
+      await this.store.appendHistory(absPath, slot, pending);
+      history = `${history}${pending}`;
+    }
 
     return {
       sessionId,
-      workspacePath,
+      workspacePath: absPath,
       slot,
-      command: resolvedCommand,
-      args,
-      existing: false,
+      command: binding.command,
+      args: binding.args,
+      existing: hostResult.existing,
+      history,
+      quickCommandExecuted,
+      lastExitCode,
+      lastSignal,
     };
   }
 
-  private emitData(sessionId: string, data: string) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-
-    const contents = webContents.fromId(session.webContentsId);
-    if (!contents || contents.isDestroyed()) {
-      return;
-    }
-
-    contents.send("terminal:data", {
-      sessionId,
-      data,
-    });
-
-    void this.store.appendHistory(session.workspacePath, session.slot, data);
-  }
-
-  private async handleExit(sessionId: string, event: { exitCode?: number | null; signal?: number | string | null }) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-
-    session.closed = true;
-    const contents = webContents.fromId(session.webContentsId);
-    if (contents && !contents.isDestroyed()) {
-      contents.send("terminal:exit", {
-        sessionId,
-        exitCode: event?.exitCode ?? null,
-        signal: (typeof event?.signal === "string" || typeof event?.signal === "number")
-          ? String(event.signal)
-          : null,
-      });
-    }
-
-    await this.store.markExit(session.workspacePath, session.slot, event?.exitCode ?? null, event?.signal as string);
-    this.dispose(sessionId, { skipPersist: true }).catch((error) => {
-      console.error("Failed to dispose terminal session", error);
-    });
-  }
-
-  async dispose(sessionId: string, options: { skipPersist?: boolean } = {}): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-
-    this.sessions.delete(sessionId);
-    const workspaceIndex = this.workspaceIndex.get(session.workspacePath);
-    workspaceIndex?.delete(session.slot);
-
-    if (session.pty) {
-      try {
-        session.pty.kill();
-      } catch (error) {
-        console.error("Failed to kill terminal", error);
-      }
-    }
-
-    if (!options.skipPersist) {
-      await this.store.clearTerminal(session.workspacePath, session.slot);
-    }
+  async write(sessionId: string, data: string): Promise<void> {
+    await this.hostClient.write({ sessionId, data });
   }
 
   async resize(sessionId: string, cols: number, rows: number): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.pty.resize(cols, rows);
+    await this.hostClient.resize({ sessionId, cols, rows });
   }
 
-  async write(sessionId: string, data: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.pty.write(data);
+  async dispose(sessionId: string, options: { skipPersist?: boolean; preserve?: boolean } = {}): Promise<void> {
+    const binding = this.sessions.get(sessionId);
+    if (!binding) {
+      await this.hostClient.dispose({ sessionId });
+      return;
+    }
+
+    this.sessions.delete(sessionId);
+    const workspaceIndex = this.workspaceIndex.get(binding.workspacePath);
+    workspaceIndex?.delete(binding.slot);
+
+    binding.subscribers.clear();
+    await this.hostClient.dispose({ sessionId });
+
+    const skipPersist = Boolean(options.skipPersist ?? options.preserve);
+    if (!skipPersist) {
+      await this.store.clearTerminal(binding.workspacePath, binding.slot);
+    }
+  }
+
+  async release(sessionId: string, webContentsId: number): Promise<void> {
+    const binding = this.sessions.get(sessionId);
+    if (!binding) return;
+    if (!binding.subscribers.has(webContentsId)) return;
+
+    binding.subscribers.delete(webContentsId);
+    if (binding.subscribers.size === 0 && !binding.closed) {
+      await this.hostClient.releaseSession({ sessionId });
+    }
   }
 
   async disposeSessionsForWebContents(webContentsId: number): Promise<void> {
-    const targets = Array.from(this.sessions.values()).filter(
-      (session) => session.webContentsId === webContentsId,
-    );
-    for (const session of targets) {
-      try {
-        await this.dispose(session.id);
-      } catch (error) {
-        console.error("Failed to dispose terminal session for closed window", error);
+    const affected: SessionBinding[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.subscribers.has(webContentsId)) {
+        session.subscribers.delete(webContentsId);
+        affected.push(session);
+      }
+    }
+    for (const session of affected) {
+      if (session.subscribers.size === 0 && !session.closed) {
+        await this.hostClient.releaseSession({ sessionId: session.id });
       }
     }
   }
@@ -310,6 +234,13 @@ export class TerminalManager {
 
   async markQuickCommandExecuted(workspacePath: string, slot: string): Promise<void> {
     await this.store.markQuickCommandExecuted(workspacePath, slot);
+    const sessionId = this.workspaceIndex.get(path.resolve(workspacePath))?.get(slot);
+    if (sessionId) {
+      const binding = this.sessions.get(sessionId);
+      if (binding) {
+        binding.quickCommandExecuted = true;
+      }
+    }
   }
 
   async setActiveTerminal(workspacePath: string, slot: string | null): Promise<void> {
@@ -318,5 +249,74 @@ export class TerminalManager {
 
   async clearWorkspaceState(workspacePath: string): Promise<void> {
     await this.store.clearWorkspaceState(workspacePath);
+  }
+
+  private async handleHostData(sessionId: string, data: string): Promise<void> {
+    const binding = this.sessions.get(sessionId);
+    if (!binding) return;
+
+    await this.store.appendHistory(binding.workspacePath, binding.slot, data);
+
+    for (const targetId of binding.subscribers) {
+      const contents = webContents.fromId(targetId);
+      if (!contents || contents.isDestroyed()) {
+        binding.subscribers.delete(targetId);
+        continue;
+      }
+      contents.send("terminal:data", {
+        sessionId,
+        data,
+      });
+    }
+  }
+
+  private async handleHostExit(sessionId: string, exitCode: number | null, signal: string | null): Promise<void> {
+    const binding = this.sessions.get(sessionId);
+    if (!binding) return;
+
+    binding.closed = true;
+    binding.lastExitCode = exitCode;
+    binding.lastSignal = signal;
+
+    await this.store.markExit(binding.workspacePath, binding.slot, exitCode, signal);
+
+    for (const targetId of binding.subscribers) {
+      const contents = webContents.fromId(targetId);
+      if (!contents || contents.isDestroyed()) {
+        binding.subscribers.delete(targetId);
+        continue;
+      }
+      contents.send("terminal:exit", {
+        sessionId,
+        exitCode,
+        signal,
+      });
+    }
+
+    const workspaceIndex = this.workspaceIndex.get(binding.workspacePath);
+    workspaceIndex?.delete(binding.slot);
+    this.sessions.delete(sessionId);
+  }
+
+  private handleHostDisposed(sessionId: string): void {
+    const binding = this.sessions.get(sessionId);
+    if (!binding) return;
+
+    binding.closed = true;
+    for (const targetId of binding.subscribers) {
+      const contents = webContents.fromId(targetId);
+      if (!contents || contents.isDestroyed()) {
+        continue;
+      }
+      contents.send("terminal:exit", {
+        sessionId,
+        exitCode: null,
+        signal: null,
+      });
+    }
+    binding.subscribers.clear();
+    const workspaceIndex = this.workspaceIndex.get(binding.workspacePath);
+    workspaceIndex?.delete(binding.slot);
+    this.sessions.delete(sessionId);
   }
 }
