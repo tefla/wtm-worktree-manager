@@ -1,5 +1,13 @@
-import type { EnsureTerminalResponse, ProjectState, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
+import type {
+  EnsureTerminalResponse,
+  ProjectState,
+  TerminalDataPayload,
+  TerminalExitPayload,
+  WorkspaceStateResponse,
+  WorkspaceSummary,
+} from "./types";
 import type { JiraTicketSummary } from "../shared/jira";
+import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
 
 declare global {
   interface Window {
@@ -15,6 +23,7 @@ declare global {
       getCurrent: () => Promise<ProjectState | null>;
       openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
+      listComposeServices: () => Promise<DockerComposeServicesSnapshot>;
     };
     wtmEnv?: {
       e2eProjectPath: string | null;

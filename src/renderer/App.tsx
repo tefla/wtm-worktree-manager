@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
+import { ComposeServicesPanel } from "./components/ComposeServicesPanel";
 import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
   TerminalDefinition,
@@ -24,6 +25,7 @@ import type {
 } from "./types";
 import { buildWorkspaceBranchName } from "../shared/jira";
 import type { JiraTicketSummary } from "../shared/jira";
+import type { DockerComposeServiceInfo } from "../shared/dockerCompose";
 
 type ToastKind = "info" | "success" | "error";
 
@@ -112,6 +114,46 @@ function normaliseQuickAccessList(list: unknown, options: { fallbackToDefault?: 
   return normalized;
 }
 
+function normaliseComposeServices(list: unknown): DockerComposeServiceInfo[] {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  const normalized: DockerComposeServiceInfo[] = [];
+  list.forEach((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const candidate = entry as Partial<DockerComposeServiceInfo>;
+    if (typeof candidate.serviceName !== "string") {
+      return;
+    }
+    const service: DockerComposeServiceInfo = {
+      serviceName: candidate.serviceName,
+      containerName:
+        typeof candidate.containerName === "string" && candidate.containerName.trim()
+          ? candidate.containerName
+          : null,
+      projectName:
+        typeof candidate.projectName === "string" && candidate.projectName.trim()
+          ? candidate.projectName
+          : "",
+      state: typeof candidate.state === "string" && candidate.state.trim() ? candidate.state : "unknown",
+      status:
+        typeof candidate.status === "string" && candidate.status.trim()
+          ? candidate.status
+          : typeof candidate.state === "string" && candidate.state.trim()
+            ? candidate.state
+            : "unknown",
+      ...(typeof candidate.id === "string" && candidate.id.trim() ? { id: candidate.id } : {}),
+      ...(typeof candidate.health === "string" && candidate.health.trim()
+        ? { health: candidate.health }
+        : {}),
+    };
+    normalized.push(service);
+  });
+  return normalized;
+}
+
 function runtimeKey(workspacePath: string, terminalKey: string): string {
   return `${workspacePath}::${terminalKey}`;
 }
@@ -186,6 +228,10 @@ function App(): JSX.Element {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [activeProjectName, setActiveProjectName] = useState<string>("");
+  const [composeProjectName, setComposeProjectName] = useState<string | null>(null);
+  const [composeServices, setComposeServices] = useState<DockerComposeServiceInfo[]>([]);
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const [composeLoading, setComposeLoading] = useState(false);
   const [openProjectsInNewWindow, setOpenProjectsInNewWindow] = useState(false);
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>([]);
@@ -211,6 +257,32 @@ function App(): JSX.Element {
   const handleToggleNewWindow = useCallback((value: boolean) => {
     setOpenProjectsInNewWindow(value);
   }, []);
+
+  const refreshComposeServices = useCallback(async () => {
+    if (!activeProjectPath) {
+      setComposeServices([]);
+      setComposeProjectName(null);
+      setComposeError(null);
+      setComposeLoading(false);
+      return;
+    }
+    setComposeLoading(true);
+    try {
+      const snapshot = await window.projectAPI.listComposeServices();
+      setComposeServices(normaliseComposeServices(snapshot?.services));
+      const projectLabel =
+        typeof snapshot?.projectName === "string" && snapshot.projectName.trim()
+          ? snapshot.projectName
+          : activeProjectName || null;
+      setComposeProjectName(projectLabel);
+      setComposeError(typeof snapshot?.error === "string" && snapshot.error ? snapshot.error : null);
+    } catch (error) {
+      console.error("Failed to load docker compose services", error);
+      setComposeError("Failed to load docker compose services");
+    } finally {
+      setComposeLoading(false);
+    }
+  }, [activeProjectName, activeProjectPath]);
 
   const reopenWorkspaceTab = useCallback(
     (workspace: WorkspaceSummary) => {
@@ -331,6 +403,10 @@ function App(): JSX.Element {
       const normalizedQuickAccess = normaliseQuickAccessList(state.quickAccess, { fallbackToDefault: true });
       defaultTerminalsRef.current = normalizedQuickAccess;
       setActiveProjectName(state.projectName);
+      setComposeProjectName(state.composeProjectName ?? null);
+      setComposeServices(normaliseComposeServices(state.composeServices));
+      setComposeError(state.composeError ?? null);
+      setComposeLoading(false);
       setActiveProjectPath((current) => (current === state.projectPath ? current : state.projectPath));
       if (persistRecent) {
         setRecentProjects((current) => {
@@ -994,11 +1070,12 @@ function App(): JSX.Element {
       await loadWorkspaces();
       await loadBranches();
       await loadJiraTickets({ forceRefresh: true });
+      await refreshComposeServices();
       pushToast("Workspace list refreshed", "success");
     } finally {
       setRefreshing(false);
     }
-  }, [activeProjectPath, loadBranches, loadJiraTickets, loadWorkspaces, pushToast]);
+  }, [activeProjectPath, loadBranches, loadJiraTickets, loadWorkspaces, pushToast, refreshComposeServices]);
 
   const handleRefreshWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
@@ -1114,8 +1191,25 @@ function App(): JSX.Element {
 
   useEffect(() => {
     if (!activeProjectPath) {
+      return;
+    }
+    void refreshComposeServices();
+    const interval = window.setInterval(() => {
+      void refreshComposeServices();
+    }, 30000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeProjectPath, refreshComposeServices]);
+
+  useEffect(() => {
+    if (!activeProjectPath) {
       setBranchCatalog({ local: [], remote: [] });
       setJiraTickets([]);
+      setComposeServices([]);
+      setComposeProjectName(null);
+      setComposeError(null);
+      setComposeLoading(false);
       return;
     }
     void loadBranches();
@@ -1415,6 +1509,8 @@ function App(): JSX.Element {
     ? `Project: ${activeProjectName || activeProjectPath}`
     : "Open a project to manage its worktrees";
 
+  const composePanelProjectName = (composeProjectName ?? activeProjectName) || null;
+
   return (
     <div className="app-shell">
       <AppHeader
@@ -1463,6 +1559,14 @@ function App(): JSX.Element {
           onTerminalClose={handleTerminalClose}
           onTerminalStart={handleTerminalStart}
           onTerminalDispose={handleTerminalDispose}
+        />
+        <ComposeServicesPanel
+          hasActiveProject={Boolean(activeProjectPath)}
+          projectName={composePanelProjectName}
+          services={composeServices}
+          loading={composeLoading}
+          error={composeError}
+          onRefresh={refreshComposeServices}
         />
       </main>
 

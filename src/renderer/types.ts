@@ -1,3 +1,5 @@
+import type { DockerComposeServiceInfo } from "../shared/dockerCompose";
+
 export interface WorkspaceStatusSummary {
   clean: boolean;
   ahead: number;
@@ -37,6 +39,9 @@ export interface ProjectState {
   projectPath: string;
   projectName: string;
   quickAccess: QuickAccessEntry[];
+  composeProjectName: string | null;
+  composeServices: DockerComposeServiceInfo[];
+  composeError?: string | null;
 }
 
 export interface EnsureTerminalResponse {

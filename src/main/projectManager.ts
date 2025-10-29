@@ -5,6 +5,8 @@ import { basename, join, resolve } from "node:path";
 import { loadProjectConfig, ProjectConfig, QuickAccessEntry, saveProjectConfig, defaultProjectConfig } from "./projectConfig";
 import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
+import { DockerComposeInspector } from "./dockerComposeInspector";
+import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
 
 const WTM_FOLDER_NAME = ".wtm";
 const CONFIG_FILE_NAME = "config.json";
@@ -24,6 +26,9 @@ export interface ProjectState {
   projectPath: string;
   projectName: string;
   quickAccess: QuickAccessEntry[];
+  composeProjectName: string | null;
+  composeServices: DockerComposeServicesSnapshot["services"];
+  composeError?: string | null;
 }
 
 export class MissingProjectStructureError extends Error {
@@ -39,6 +44,7 @@ export class ProjectManager {
   constructor(
     private readonly workspaceManager: WorkspaceManager,
     private readonly terminalSessionStore: TerminalSessionStore,
+    private readonly dockerComposeInspector: DockerComposeInspector,
   ) {
     this.current = null;
   }
@@ -47,11 +53,11 @@ export class ProjectManager {
     return this.current;
   }
 
-  getCurrentState(): ProjectState | null {
+  async getCurrentState(): Promise<ProjectState | null> {
     if (!this.current) {
       return null;
     }
-    return this.toProjectState(this.current);
+    return this.buildProjectState(this.current);
   }
 
   private ensureDirectoryExists = async (target: string) => {
@@ -144,7 +150,7 @@ export class ProjectManager {
   async setCurrentProject(projectPath: string): Promise<ProjectState> {
     const context = await this.loadExistingProject(projectPath);
     await this.applyContext(context);
-    return this.toProjectState(context);
+    return this.buildProjectState(context);
   }
 
   async setCurrentProjectWithPrompt(projectPath: string, browserWindow?: Electron.BrowserWindow): Promise<ProjectState | null> {
@@ -164,7 +170,7 @@ export class ProjectManager {
         if (response.response === 0) {
           const context = await this.initialiseProjectStructure(projectPath);
           await this.applyContext(context);
-          return this.toProjectState(context);
+          return this.buildProjectState(context);
         }
         return null;
       }
@@ -172,11 +178,22 @@ export class ProjectManager {
     }
   }
 
-  private toProjectState(context: ProjectContext): ProjectState {
+  async listComposeServices(): Promise<DockerComposeServicesSnapshot> {
+    if (!this.current) {
+      return { projectName: null, services: [] };
+    }
+    return this.dockerComposeInspector.inspect(this.current.projectPath);
+  }
+
+  private async buildProjectState(context: ProjectContext): Promise<ProjectState> {
+    const composeSnapshot = await this.dockerComposeInspector.inspect(context.projectPath);
     return {
       projectPath: context.projectPath,
       projectName: basename(context.projectPath) || context.projectPath,
       quickAccess: context.config.quickAccess,
+      composeProjectName: composeSnapshot.projectName,
+      composeServices: composeSnapshot.services,
+      ...(composeSnapshot.error ? { composeError: composeSnapshot.error } : {}),
     };
   }
 }
