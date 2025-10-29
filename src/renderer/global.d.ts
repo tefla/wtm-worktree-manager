@@ -1,4 +1,5 @@
 import type { EnsureTerminalResponse, ProjectState, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
+import type { JiraTicketSummary } from "../shared/jira";
 
 declare global {
   interface Window {
@@ -8,6 +9,7 @@ declare global {
       delete: (params: { path: string; force?: boolean }) => Promise<{ success: boolean; reason?: string; message?: string; path?: string }>;
       refresh: (params: { path: string }) => Promise<WorkspaceSummary>;
       update: (params: { path: string }) => Promise<WorkspaceSummary>;
+      listBranches: () => Promise<{ local: string[]; remote: string[] }>;
     };
     projectAPI: {
       getCurrent: () => Promise<ProjectState | null>;
@@ -27,6 +29,10 @@ declare global {
       clearWorkspaceState: (workspacePath: string) => Promise<void>;
       onData: (callback: (payload: TerminalDataPayload) => void) => () => void;
       onExit: (callback: (payload: TerminalExitPayload) => void) => () => void;
+    };
+    jiraAPI: {
+      listTickets: (params?: { forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
+      searchTickets: (params: { query: string; limit?: number; forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
     };
   }
 }

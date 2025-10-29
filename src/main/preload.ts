@@ -8,6 +8,7 @@ type WorkspaceAPI = {
   delete: (params: unknown) => Promise<unknown>;
   refresh: (params: unknown) => Promise<unknown>;
   update: (params: unknown) => Promise<unknown>;
+  listBranches: () => Promise<unknown>;
 };
 
 type ProjectAPI = {
@@ -31,6 +32,11 @@ type TerminalAPI = {
   onExit: (callback: (payload: unknown) => void) => ListenerDisposer;
 };
 
+type JiraAPI = {
+  listTickets: (params?: unknown) => Promise<unknown>;
+  searchTickets: (params: unknown) => Promise<unknown>;
+};
+
 const invoke = (channel: string, payload?: unknown) => ipcRenderer.invoke(channel, payload);
 const addListener = (channel: string, callback: (payload: unknown) => void): ListenerDisposer => {
   const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
@@ -46,6 +52,7 @@ contextBridge.exposeInMainWorld("workspaceAPI", {
   delete: (params) => invoke("workspace:delete", params),
   refresh: (params) => invoke("workspace:refresh", params),
   update: (params) => invoke("workspace:update", params),
+  listBranches: () => invoke("workspace:listBranches"),
 } satisfies WorkspaceAPI);
 
 contextBridge.exposeInMainWorld("projectAPI", {
@@ -69,10 +76,16 @@ contextBridge.exposeInMainWorld("terminalAPI", {
   onExit: (callback) => addListener("terminal:exit", callback),
 } satisfies TerminalAPI);
 
+contextBridge.exposeInMainWorld("jiraAPI", {
+  listTickets: (params) => invoke("jira:listTickets", params),
+  searchTickets: (params) => invoke("jira:searchTickets", params),
+} satisfies JiraAPI);
+
 declare global {
   interface Window {
     workspaceAPI: WorkspaceAPI;
     projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
+    jiraAPI: JiraAPI;
   }
 }

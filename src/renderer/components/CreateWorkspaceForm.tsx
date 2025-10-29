@@ -1,5 +1,13 @@
 import React, { FormEvent } from "react";
 
+export interface BranchSuggestion {
+  id: string;
+  value: string;
+  label: string;
+  source: "workspace" | "local" | "remote" | "jira";
+  baseRef?: string;
+}
+
 export interface CreateWorkspaceFormProps {
   branchInput: string;
   baseInput: string;
@@ -8,6 +16,7 @@ export interface CreateWorkspaceFormProps {
   onBranchChange: (value: string) => void;
   onBaseChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  branchSuggestions?: BranchSuggestion[];
   variant?: "panel" | "inline";
 }
 
@@ -19,6 +28,7 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
   onBranchChange,
   onBaseChange,
   onSubmit,
+  branchSuggestions = [],
   variant = "panel",
 }) => {
   const inputsDisabled = createInFlight || disabled;
@@ -27,6 +37,8 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
   const fieldClassName = `field${inline ? " field--inline" : ""}`;
   const optionalFieldClassName = `field optional${inline ? " field--inline" : ""}`;
   const labelClassName = inline ? "field-label sr-only" : "field-label";
+  const showSuggestions = branchSuggestions.length > 0;
+  const suggestionListId = inline ? "branch-suggestions-inline" : "branch-suggestions-panel";
 
   const form = (
     <form id="create-form" className={formClassName} autoComplete="off" onSubmit={onSubmit}>
@@ -42,7 +54,15 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
           required
           disabled={inputsDisabled}
           aria-label={inline ? "Branch or ticket name" : undefined}
+          list={showSuggestions ? suggestionListId : undefined}
         />
+        {showSuggestions ? (
+          <datalist id={suggestionListId}>
+            {branchSuggestions.map((suggestion) => (
+              <option key={suggestion.id} value={suggestion.value} label={suggestion.label} />
+            ))}
+          </datalist>
+        ) : null}
       </label>
       <label className={optionalFieldClassName}>
         <span className={labelClassName}>Base ref (optional)</span>
