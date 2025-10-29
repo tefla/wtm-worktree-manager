@@ -1,26 +1,28 @@
 import React from "react";
-import type { SettingsResponse } from "../types";
-
 interface AppHeaderProps {
   title: string;
   subtitle: string;
-  environments: SettingsResponse["environments"];
-  activeEnvironment: string;
+  recentProjects: Array<{ path: string; label: string }>;
+  activeProjectPath: string | null;
   refreshing: boolean;
-  onEnvironmentChange: (name: string) => void;
+  onSelectProject: (path: string) => void;
+  onOpenProject: () => void;
   onRefreshAll: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   title,
   subtitle,
-  environments,
-  activeEnvironment,
+  recentProjects,
+  activeProjectPath,
   refreshing,
-  onEnvironmentChange,
+  onSelectProject,
+  onOpenProject,
   onRefreshAll,
 }) => {
-  const environmentEntries = Object.entries(environments);
+  const hasProjects = recentProjects.length > 0;
+  const selectValue = activeProjectPath ?? "";
+  const showPlaceholder = !selectValue;
   return (
     <header className="app-header">
       <div className="header-text">
@@ -29,20 +31,29 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
       <div className="header-actions">
         <label className="environment-switcher">
-          <span>Environment</span>
+          <span>Project</span>
           <select
-            id="environment-select"
-            name="environment"
-            value={activeEnvironment}
-            onChange={(event) => onEnvironmentChange(event.target.value)}
+            id="project-select"
+            name="project"
+            value={selectValue}
+            onChange={(event) => onSelectProject(event.target.value)}
+            disabled={!hasProjects}
           >
-            {environmentEntries.map(([name]) => (
-              <option key={name} value={name}>
-                {name}
+            {showPlaceholder && (
+              <option value="" disabled>
+                Select a project
+              </option>
+            )}
+            {recentProjects.map((project) => (
+              <option key={project.path} value={project.path}>
+                {project.label}
               </option>
             ))}
           </select>
         </label>
+        <button className="ghost-button" type="button" onClick={onOpenProject}>
+          Open…
+        </button>
         <button
           id="refresh-button"
           className="accent-button"

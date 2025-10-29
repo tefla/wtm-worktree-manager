@@ -4,6 +4,7 @@ interface CreateWorkspaceFormProps {
   branchInput: string;
   baseInput: string;
   createInFlight: boolean;
+  disabled?: boolean;
   onBranchChange: (value: string) => void;
   onBaseChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -13,10 +14,12 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
   branchInput,
   baseInput,
   createInFlight,
+  disabled = false,
   onBranchChange,
   onBaseChange,
   onSubmit,
 }) => {
+  const inputsDisabled = createInFlight || disabled;
   return (
     <section className="create-section">
       <form id="create-form" autoComplete="off" onSubmit={onSubmit}>
@@ -30,7 +33,7 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
             value={branchInput}
             onChange={(event) => onBranchChange(event.target.value)}
             required
-            disabled={createInFlight}
+            disabled={inputsDisabled}
           />
         </label>
         <label className="field optional">
@@ -39,13 +42,13 @@ export const CreateWorkspaceForm: React.FC<CreateWorkspaceFormProps> = ({
             id="base-input"
             name="base"
             type="text"
-            placeholder="origin/develop"
+            placeholder="current repo branch"
             value={baseInput}
             onChange={(event) => onBaseChange(event.target.value)}
-            disabled={createInFlight}
+            disabled={inputsDisabled}
           />
         </label>
-        <button id="create-button" className="primary-button" type="submit" disabled={createInFlight}>
+        <button id="create-button" className="primary-button" type="submit" disabled={inputsDisabled}>
           {createInFlight ? "Creating…" : "Create Workspace"}
         </button>
       </form>

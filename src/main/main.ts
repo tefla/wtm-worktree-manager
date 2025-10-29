@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import path from "node:path";
 import { workspaceManager } from "./workspaceManager";
 import { terminalManager } from "./terminalManager";
-import { settingsManager } from "./settingsManager";
+import { projectManager } from "./projectManager";
 
 const isMac = process.platform === "darwin";
 
@@ -128,54 +128,53 @@ function exposeTerminalHandlers() {
   });
 }
 
-function exposeSettingsHandlers() {
-  ipcMain.handle("settings:listEnvironments", async () => {
-    await settingsManager.load();
-    const environments = settingsManager.listEnvironments();
-    const active = settingsManager.getActiveEnvironment();
-    const quickAccess = settingsManager.getQuickAccess();
-    return {
-      environments,
-      activeEnvironment: active.name,
-      quickAccess,
-    };
+function exposeProjectHandlers() {
+  ipcMain.handle("project:getCurrent", async () => {
+    return projectManager.getCurrentState();
   });
 
-  ipcMain.handle("settings:setActiveEnvironment", async (_event, params) => {
-    const name = params?.name;
-    if (typeof name !== "string" || !name) {
-      throw new Error("Environment name is required");
+  ipcMain.handle("project:openPath", async (event, params) => {
+    const targetPath = typeof params?.path === "string" ? params.path : "";
+    if (!targetPath) {
+      throw new Error("Project path is required");
     }
+    const browserWindow = BrowserWindow.fromWebContents(event.sender);
+    try {
+      return await projectManager.setCurrentProjectWithPrompt(targetPath, browserWindow ?? undefined);
+    } catch (error) {
+      dialog.showErrorBox(
+        "Open Project Failed",
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    }
+  });
 
-    const environment = await settingsManager.setActiveEnvironment(name);
-    workspaceManager.configure(environment);
-    const environments = settingsManager.listEnvironments();
-    const quickAccess = settingsManager.getQuickAccess();
-
-    return {
-      activeEnvironment: environment.name,
-      environment,
-      environments,
-      quickAccess,
-    };
+  ipcMain.handle("project:openDialog", async (event) => {
+    const browserWindow = BrowserWindow.fromWebContents(event.sender);
+    const selection = await dialog.showOpenDialog(browserWindow ?? undefined, {
+      properties: ["openDirectory"],
+    });
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return null;
+    }
+    const targetPath = selection.filePaths[0];
+    try {
+      return await projectManager.setCurrentProjectWithPrompt(targetPath, browserWindow ?? undefined);
+    } catch (error) {
+      dialog.showErrorBox(
+        "Open Project Failed",
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    }
   });
 }
 
 app.whenReady().then(async () => {
-  try {
-    await settingsManager.load();
-    const environment = settingsManager.getActiveEnvironment();
-    workspaceManager.configure(environment);
-  } catch (error) {
-    dialog.showErrorBox(
-      "WTM Settings Error",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-
   exposeWorkspaceHandlers();
   exposeTerminalHandlers();
-  exposeSettingsHandlers();
+  exposeProjectHandlers();
   await createWindow();
 
   app.on("activate", async () => {

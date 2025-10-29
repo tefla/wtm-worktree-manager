@@ -33,9 +33,9 @@ export interface QuickAccessEntry {
   quickCommand: string;
 }
 
-export interface SettingsResponse {
-  environments: Record<string, { repoDir: string; workspaceRoot: string }>;
-  activeEnvironment: string;
+export interface ProjectState {
+  projectPath: string;
+  projectName: string;
   quickAccess: QuickAccessEntry[];
 }
 

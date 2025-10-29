@@ -15,8 +15,8 @@ import type {
 import { cx } from "./utils/cx";
 import type {
   EnsureTerminalResponse,
+  ProjectState,
   QuickAccessEntry,
-  SettingsResponse,
   TerminalDataPayload,
   TerminalExitPayload,
   WorkspaceStateResponse,
@@ -42,6 +42,13 @@ interface TerminalRuntime {
   resizeObserver: ResizeObserver;
   container: HTMLDivElement;
 }
+
+interface RecentProject {
+  path: string;
+  name: string;
+}
+
+const RECENT_PROJECTS_STORAGE_KEY = "wtm:recent-projects";
 
 const TERMINAL_HISTORY_LIMIT = 40000;
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "SFMono-Regular", monospace';
@@ -118,6 +125,51 @@ function ensureSavedWorkspaceState(workspacePath: string, saved?: WorkspaceState
   };
 }
 
+function loadRecentProjectsFromStorage(): RecentProject[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const entries: RecentProject[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const path = typeof (item as RecentProject).path === "string" ? (item as RecentProject).path.trim() : "";
+      if (!path) {
+        continue;
+      }
+      const name = typeof (item as RecentProject).name === "string" ? (item as RecentProject).name.trim() : "";
+      entries.push({ path, name: name || path });
+    }
+    return entries;
+  } catch (error) {
+    console.error("Failed to load recent projects", error);
+    return [];
+  }
+}
+
+function persistRecentProjects(projects: RecentProject[]): void {
+  try {
+    window.localStorage.setItem(
+      RECENT_PROJECTS_STORAGE_KEY,
+      JSON.stringify(projects.slice(0, 8)),
+    );
+  } catch (error) {
+    console.error("Failed to persist recent projects", error);
+  }
+}
+
+function upsertRecentProject(projects: RecentProject[], entry: RecentProject): RecentProject[] {
+  const unique = projects.filter((item) => item.path !== entry.path);
+  return [entry, ...unique].slice(0, 8);
+}
+
 function App(): JSX.Element {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
@@ -125,14 +177,16 @@ function App(): JSX.Element {
   const [branchInput, setBranchInput] = useState("");
   const [baseInput, setBaseInput] = useState("");
   const [createInFlight, setCreateInFlight] = useState(false);
-  const [environments, setEnvironments] = useState<SettingsResponse["environments"]>({});
-  const [activeEnvironment, setActiveEnvironment] = useState<string>("");
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState<string>("");
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>([]);
   const [activeWorkspacePath, setActiveWorkspacePath] = useState<string | null>(null);
   const workspaceTabsRef = useRef<Map<string, WorkspaceTabState>>(new Map());
   const sessionIndexRef = useRef<Map<string, SessionIndexEntry>>(new Map());
   const runtimeRef = useRef<Map<string, TerminalRuntime>>(new Map());
+  const previousProjectPathRef = useRef<string | null>(null);
   const [toastList, setToastList] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
@@ -160,6 +214,12 @@ function App(): JSX.Element {
   );
 
   const loadWorkspaces = useCallback(async (): Promise<WorkspaceSummary[]> => {
+    if (!activeProjectPath) {
+      setWorkspaces([]);
+      setActiveWorkspacePath(null);
+      setLoadingWorkspaces(false);
+      return [];
+    }
     setLoadingWorkspaces(true);
     let list: WorkspaceSummary[] = [];
     try {
@@ -176,26 +236,76 @@ function App(): JSX.Element {
         return list[0].path;
       });
     } catch (error) {
-      console.error("Failed to load workspaces", error);
-      pushToast("Failed to load workspaces", "error");
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("No project configured")) {
+        // User has not selected a project yet; avoid spamming toasts.
+        setWorkspaces([]);
+        setActiveWorkspacePath(null);
+      } else {
+        console.error("Failed to load workspaces", error);
+        pushToast("Failed to load workspaces", "error");
+      }
     } finally {
       setLoadingWorkspaces(false);
     }
     return list;
-  }, [pushToast, reopenWorkspaceTab]);
+  }, [activeProjectPath, pushToast, reopenWorkspaceTab]);
 
-  const loadSettings = useCallback(async () => {
+  const applyProjectState = useCallback(
+    (state: ProjectState, options: { persistRecent?: boolean } = {}) => {
+      const { persistRecent = true } = options;
+      const normalizedQuickAccess = normaliseQuickAccessList(state.quickAccess, { fallbackToDefault: true });
+      defaultTerminalsRef.current = normalizedQuickAccess;
+      setActiveProjectName(state.projectName);
+      setActiveProjectPath((current) => (current === state.projectPath ? current : state.projectPath));
+      if (persistRecent) {
+        setRecentProjects((current) => {
+          const updated = upsertRecentProject(current, { path: state.projectPath, name: state.projectName });
+          persistRecentProjects(updated);
+          return updated;
+        });
+      }
+    },
+    [],
+  );
+
+  const openProjectByPath = useCallback(
+    async (path: string, options: { silent?: boolean } = {}) => {
+      const { silent = false } = options;
+      const trimmed = path.trim();
+      if (!trimmed) {
+        return;
+      }
+      try {
+        const state = await window.projectAPI.openPath({ path: trimmed });
+        if (!state) {
+          return;
+        }
+        applyProjectState(state);
+        if (!silent) {
+          pushToast(`Project opened: ${state.projectName}`, "success");
+        }
+      } catch (error) {
+        console.error("Failed to open project", error);
+        pushToast("Failed to open project", "error");
+      }
+    },
+    [applyProjectState, pushToast],
+  );
+
+  const openProjectWithDialog = useCallback(async () => {
     try {
-      const response = await window.settingsAPI.listEnvironments();
-      setEnvironments(response.environments);
-      setActiveEnvironment(response.activeEnvironment);
-      const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
-      defaultTerminalsRef.current = normalized;
+      const state = await window.projectAPI.openDialog();
+      if (!state) {
+        return;
+      }
+      applyProjectState(state);
+      pushToast(`Project opened: ${state.projectName}`, "success");
     } catch (error) {
-      console.error("Failed to load settings", error);
-      pushToast("Failed to load settings", "error");
+      console.error("Failed to open project via dialog", error);
+      pushToast("Failed to open project", "error");
     }
-  }, [pushToast]);
+  }, [applyProjectState, pushToast]);
 
   const generateEphemeralLabel = useCallback((workspaceState: WorkspaceTabState): string => {
     const label = `Terminal ${workspaceState.ephemeralCounter}`;
@@ -302,6 +412,21 @@ function App(): JSX.Element {
     },
     [],
   );
+
+  const clearAllWorkspaces = useCallback(() => {
+    workspaceTabsRef.current.forEach((state, path) => {
+      state.terminals.forEach((record) => {
+        disposeTerminalRuntime(path, record, true);
+      });
+    });
+    workspaceTabsRef.current.clear();
+    sessionIndexRef.current.clear();
+    runtimeRef.current.clear();
+    setWorkspaceOrder([]);
+    setActiveWorkspacePath(null);
+    setWorkspaces([]);
+    setUpdatingWorkspaces({});
+  }, [disposeTerminalRuntime]);
 
   const setActiveTerminal = useCallback(
     (workspaceState: WorkspaceTabState, terminalKey: string | null) => {
@@ -637,33 +762,19 @@ function App(): JSX.Element {
     [activeWorkspacePath, disposeTerminalRuntime, workspaceOrder],
   );
 
-  const handleEnvironmentChange = useCallback(
-    async (name: string) => {
-      if (!name || name === activeEnvironment) {
+  const handleProjectSelect = useCallback(
+    (path: string) => {
+      if (!path || path === activeProjectPath) {
         return;
       }
-      try {
-        const response = await window.settingsAPI.setActiveEnvironment({ name });
-        setEnvironments(response.environments);
-        setActiveEnvironment(response.activeEnvironment);
-        const normalized = normaliseQuickAccessList(response.quickAccess, { fallbackToDefault: true });
-        defaultTerminalsRef.current = normalized;
-
-        workspaceTabsRef.current.forEach((state, path) => {
-          closeWorkspace(path, { preserveState: true });
-        });
-        workspaceTabsRef.current.clear();
-        setWorkspaceOrder([]);
-        setActiveWorkspacePath(null);
-        pushToast(`Switched to ${name}`, "success");
-        await loadWorkspaces();
-      } catch (error) {
-        console.error("Failed to switch environment", error);
-        pushToast("Failed to switch environment", "error");
-      }
+      void openProjectByPath(path);
     },
-    [activeEnvironment, closeWorkspace, loadWorkspaces, pushToast],
+    [activeProjectPath, openProjectByPath],
   );
+
+  const handleOpenProjectDialog = useCallback(() => {
+    void openProjectWithDialog();
+  }, [openProjectWithDialog]);
 
   const restoreWorkspacesFromStore = useCallback(
     async (workspaceList: WorkspaceSummary[]) => {
@@ -730,6 +841,10 @@ function App(): JSX.Element {
         pushToast("Branch name is required", "error");
         return;
       }
+      if (!activeProjectPath) {
+        pushToast("Open a project before creating workspaces", "error");
+        return;
+      }
       setCreateInFlight(true);
       try {
         const workspace = await window.workspaceAPI.create({
@@ -748,18 +863,22 @@ function App(): JSX.Element {
         setCreateInFlight(false);
       }
     },
-    [baseInput, branchInput, handleWorkspaceSelect, loadWorkspaces, pushToast],
+    [activeProjectPath, baseInput, branchInput, handleWorkspaceSelect, loadWorkspaces, pushToast],
   );
 
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
+      if (!activeProjectPath) {
+        pushToast("Open a project first", "info");
+        return;
+      }
       await loadWorkspaces();
       pushToast("Workspace list refreshed", "success");
     } finally {
       setRefreshing(false);
     }
-  }, [loadWorkspaces, pushToast]);
+  }, [activeProjectPath, loadWorkspaces, pushToast]);
 
   const handleRefreshWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
@@ -833,12 +952,40 @@ function App(): JSX.Element {
   );
 
   useEffect(() => {
+    const stored = loadRecentProjectsFromStorage();
+    setRecentProjects(stored);
     void (async () => {
-      await loadSettings();
+      try {
+        const current = await window.projectAPI.getCurrent();
+        if (current) {
+          applyProjectState(current, { persistRecent: true });
+          return;
+        }
+        if (stored.length > 0) {
+          await openProjectByPath(stored[0].path, { silent: true });
+        }
+      } catch (error) {
+        console.error("Failed to initialise project", error);
+      }
+    })();
+  }, [applyProjectState, openProjectByPath]);
+
+  useEffect(() => {
+    if (previousProjectPathRef.current && previousProjectPathRef.current !== activeProjectPath) {
+      clearAllWorkspaces();
+    }
+    previousProjectPathRef.current = activeProjectPath;
+  }, [activeProjectPath, clearAllWorkspaces]);
+
+  useEffect(() => {
+    if (!activeProjectPath) {
+      return;
+    }
+    void (async () => {
       const list = await loadWorkspaces();
       await restoreWorkspacesFromStore(list);
     })();
-  }, [loadSettings, loadWorkspaces, restoreWorkspacesFromStore]);
+  }, [activeProjectPath, loadWorkspaces, restoreWorkspacesFromStore]);
 
   useEffect(() => {
     const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
@@ -926,15 +1073,29 @@ function App(): JSX.Element {
     [workspaces],
   );
 
+  const headerProjects = useMemo(
+    () =>
+      recentProjects.map((project) => ({
+        path: project.path,
+        label: project.name && project.name !== project.path ? `${project.name} (${project.path})` : project.path,
+      })),
+    [recentProjects],
+  );
+
+  const headerSubtitle = activeProjectPath
+    ? `Project: ${activeProjectName || activeProjectPath}`
+    : "Open a project to manage its worktrees";
+
   return (
     <div className="app-shell">
       <AppHeader
         title="WTM (WorkTree Manager)"
-        subtitle="Manage git worktrees for your project repositories"
-        environments={environments}
-        activeEnvironment={activeEnvironment}
+        subtitle={headerSubtitle}
+        recentProjects={headerProjects}
+        activeProjectPath={activeProjectPath}
         refreshing={refreshing}
-        onEnvironmentChange={handleEnvironmentChange}
+        onSelectProject={handleProjectSelect}
+        onOpenProject={handleOpenProjectDialog}
         onRefreshAll={handleRefreshAll}
       />
 
@@ -942,6 +1103,7 @@ function App(): JSX.Element {
         branchInput={branchInput}
         baseInput={baseInput}
         createInFlight={createInFlight}
+        disabled={!activeProjectPath}
         onBranchChange={setBranchInput}
         onBaseChange={setBaseInput}
         onSubmit={handleCreateWorkspace}
