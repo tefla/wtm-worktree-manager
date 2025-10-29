@@ -41,6 +41,10 @@ const addListener = (channel: string, callback: (payload: unknown) => void): Lis
   };
 };
 
+contextBridge.exposeInMainWorld("wtmEnv", {
+  e2eProjectPath: process.env.WTM_E2E_PROJECT_PATH ?? null,
+});
+
 contextBridge.exposeInMainWorld("workspaceAPI", {
   list: () => invoke("workspace:list"),
   create: (params) => invoke("workspace:create", params),
@@ -76,5 +80,8 @@ declare global {
     workspaceAPI: WorkspaceAPI;
     projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
+    wtmEnv?: {
+      e2eProjectPath: string | null;
+    };
   }
 }

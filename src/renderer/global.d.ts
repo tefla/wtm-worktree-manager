@@ -14,6 +14,9 @@ declare global {
       openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
     };
+    wtmEnv?: {
+      e2eProjectPath: string | null;
+    };
     terminalAPI: {
       ensureSession: (params: { workspacePath: string; slot: string; command?: string; args?: string[]; cols?: number; rows?: number; env?: Record<string, string>; label?: string }) => Promise<EnsureTerminalResponse>;
       write: (sessionId: string, data: string) => void;

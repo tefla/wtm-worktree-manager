@@ -100,6 +100,9 @@ export class TerminalManager {
     const resolvedCommand = resolveCommand(command ?? process.env.SHELL ?? "zsh");
     const resolvedArgs = Array.isArray(args) && args.length > 0 ? args : defaultShellArgs(resolvedCommand);
 
+    if (process.env.WTM_E2E_PROJECT_PATH) {
+      console.log("[TerminalManager] ensureSession request", { workspacePath: absPath, slot });
+    }
     const hostResult = await this.hostClient.ensureSession({
       workspacePath: absPath,
       slot,
@@ -110,6 +113,9 @@ export class TerminalManager {
       env,
       label,
     });
+    if (process.env.WTM_E2E_PROJECT_PATH) {
+      console.log("[TerminalManager] ensureSession response", { slot, sessionId: hostResult.sessionId, existing: hostResult.existing });
+    }
 
     const sessionId = hostResult.sessionId;
 

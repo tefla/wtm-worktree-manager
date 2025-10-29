@@ -1007,6 +1007,11 @@ function App(): JSX.Element {
           applyProjectState(current, { persistRecent: true });
           return;
         }
+        const automationProjectPath = window.wtmEnv?.e2eProjectPath ?? undefined;
+        if (automationProjectPath) {
+          await openProjectByPath(automationProjectPath, { silent: true });
+          return;
+        }
         if (stored.length > 0) {
           await openProjectByPath(stored[0].path, { silent: true });
         }

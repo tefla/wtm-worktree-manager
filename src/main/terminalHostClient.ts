@@ -142,13 +142,17 @@ export class TerminalHostClient extends EventEmitter {
       const dir = path.dirname(socketPath);
       mkdirSync(dir, { recursive: true });
     }
-    try {
-      await this.openSocket(socketPath);
-    } catch (error) {
-      await this.spawnHostProcess();
-      await this.delay(150);
-      await this.openSocket(socketPath);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        await this.openSocket(socketPath);
+        return;
+      } catch (error) {
+        await this.spawnHostProcess();
+        const backoff = 150 + attempt * 100;
+        await this.delay(backoff);
+      }
     }
+    throw new Error("Failed to connect to terminal host");
   }
 
   private async openSocket(socketPath: string): Promise<void> {

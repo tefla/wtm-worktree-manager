@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { rmSync } from "node:fs";
 import { createServer, Server, Socket } from "node:net";
 import path from "node:path";
@@ -22,8 +23,52 @@ import {
 } from "./terminalHostProtocol";
 import { getHostSocketPath } from "./terminalHostPaths";
 
+const useFakePty = process.env.WTM_FAKE_PTY === "1";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const pty: typeof import("node-pty") = require("node-pty");
+const realPty: typeof import("node-pty") | null = useFakePty ? null : require("node-pty");
+
+interface PtyAdapter {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+  onData(handler: (data: string) => void): void;
+  onExit(handler: (event: { exitCode?: number | null; signal?: number | string | null }) => void): void;
+}
+
+class FakePty implements PtyAdapter {
+  private readonly emitter: EventEmitter;
+  private killed: boolean;
+
+  constructor() {
+    this.emitter = new EventEmitter();
+    this.killed = false;
+  }
+
+  write(data: string): void {
+    if (this.killed) return;
+    setTimeout(() => {
+      this.emitter.emit("data", data);
+    }, 0);
+  }
+
+  resize(): void {
+    // no-op
+  }
+
+  kill(): void {
+    if (this.killed) return;
+    this.killed = true;
+    this.emitter.emit("exit", { exitCode: 0, signal: null });
+  }
+
+  onData(handler: (data: string) => void): void {
+    this.emitter.on("data", handler);
+  }
+
+  onExit(handler: (event: { exitCode?: number | null; signal?: number | string | null }) => void): void {
+    this.emitter.on("exit", handler);
+  }
+}
 
 interface SessionDescriptor {
   id: string;
@@ -31,7 +76,7 @@ interface SessionDescriptor {
   slot: string;
   command: string;
   args: string[];
-  pty: IPty;
+  pty: PtyAdapter;
   subscribers: Set<ClientDescriptor>;
   pendingOutput: string;
   disposed: boolean;
@@ -46,7 +91,10 @@ interface ClientDescriptor {
 }
 
 const HISTORY_LIMIT = 40000;
-const IDLE_SHUTDOWN_MS = 60_000;
+const DEFAULT_IDLE_MS = 60_000;
+const IDLE_SHUTDOWN_MS = process.env.WTM_IDLE_SHUTDOWN_MS
+  ? Number(process.env.WTM_IDLE_SHUTDOWN_MS)
+  : DEFAULT_IDLE_MS;
 
 class TerminalHostServer {
   private server: Server | null;
@@ -55,6 +103,7 @@ class TerminalHostServer {
   private clients: Map<string, ClientDescriptor>;
   private storePath: string | null;
   private shutdownTimer: NodeJS.Timeout | null;
+  private readonly useFakePty: boolean;
 
   constructor(private readonly socketPath: string) {
     this.server = null;
@@ -63,6 +112,7 @@ class TerminalHostServer {
     this.clients = new Map();
     this.storePath = null;
     this.shutdownTimer = null;
+    this.useFakePty = useFakePty;
   }
 
   start(): void {
@@ -242,8 +292,7 @@ class TerminalHostServer {
     }
 
     const sessionId = randomUUID();
-    const ptyProcess = pty.spawn(command, args.length > 0 ? args : this.defaultShellArgs(command), {
-      name: "xterm-color",
+    const ptyProcess = this.createPty(command, args.length > 0 ? args : this.defaultShellArgs(command), {
       cols,
       rows,
       cwd: workspacePath,
@@ -457,6 +506,23 @@ class TerminalHostServer {
       clearTimeout(this.shutdownTimer);
       this.shutdownTimer = null;
     }
+  }
+
+  private createPty(
+    command: string,
+    args: string[],
+    options: { cols: number; rows: number; cwd: string; env: NodeJS.ProcessEnv },
+  ): PtyAdapter {
+    if (this.useFakePty || !realPty) {
+      return new FakePty();
+    }
+    return realPty.spawn(command, args, {
+      name: "xterm-color",
+      cols: options.cols,
+      rows: options.rows,
+      cwd: options.cwd,
+      env: options.env,
+    });
   }
 }
 
