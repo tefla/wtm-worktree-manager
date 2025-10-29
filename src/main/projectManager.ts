@@ -2,9 +2,18 @@ import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { loadProjectConfig, ProjectConfig, QuickAccessEntry, saveProjectConfig, defaultProjectConfig } from "./projectConfig";
+import {
+  defaultProjectConfig,
+  JiraProjectConfig,
+  loadProjectConfig,
+  normaliseProjectConfig,
+  ProjectConfig,
+  QuickAccessEntry,
+  saveProjectConfig,
+} from "./projectConfig";
 import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
+import { JiraIntegration } from "./jiraIntegration";
 
 const WTM_FOLDER_NAME = ".wtm";
 const CONFIG_FILE_NAME = "config.json";
@@ -24,6 +33,7 @@ export interface ProjectState {
   projectPath: string;
   projectName: string;
   quickAccess: QuickAccessEntry[];
+  jira: JiraProjectConfig;
 }
 
 export class MissingProjectStructureError extends Error {
@@ -39,6 +49,7 @@ export class ProjectManager {
   constructor(
     private readonly workspaceManager: WorkspaceManager,
     private readonly terminalSessionStore: TerminalSessionStore,
+    private readonly jiraIntegration: JiraIntegration,
   ) {
     this.current = null;
   }
@@ -139,6 +150,7 @@ export class ProjectManager {
     await this.terminalSessionStore.configure({
       filePath: context.terminalsPath,
     });
+    this.jiraIntegration.configure(context.config.jira);
   }
 
   async setCurrentProject(projectPath: string): Promise<ProjectState> {
@@ -177,6 +189,19 @@ export class ProjectManager {
       projectPath: context.projectPath,
       projectName: basename(context.projectPath) || context.projectPath,
       quickAccess: context.config.quickAccess,
+      jira: context.config.jira,
     };
+  }
+
+  async updateConfig(rawConfig: unknown): Promise<ProjectState> {
+    if (!this.current) {
+      throw new Error("No project is currently active");
+    }
+
+    const normalised = normaliseProjectConfig(rawConfig);
+    this.current.config = normalised;
+    await saveProjectConfig(this.current.configPath, normalised);
+    this.jiraIntegration.configure(normalised.jira);
+    return this.toProjectState(this.current);
   }
 }

@@ -1,4 +1,13 @@
-import type { EnsureTerminalResponse, ProjectState, TerminalDataPayload, TerminalExitPayload, WorkspaceStateResponse, WorkspaceSummary } from "./types";
+import type {
+  EnsureTerminalResponse,
+  JiraLoginResult,
+  ProjectConfigPayload,
+  ProjectState,
+  TerminalDataPayload,
+  TerminalExitPayload,
+  WorkspaceStateResponse,
+  WorkspaceSummary,
+} from "./types";
 import type { JiraTicketSummary } from "../shared/jira";
 
 declare global {
@@ -15,6 +24,7 @@ declare global {
       getCurrent: () => Promise<ProjectState | null>;
       openPath: (params: { path: string; openInNewWindow?: boolean }) => Promise<ProjectState | null>;
       openDialog: (params?: { openInNewWindow?: boolean }) => Promise<ProjectState | null>;
+      updateConfig: (config: ProjectConfigPayload) => Promise<ProjectState>;
     };
     wtmEnv?: {
       e2eProjectPath: string | null;
@@ -37,6 +47,7 @@ declare global {
     jiraAPI: {
       listTickets: (params?: { forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
       searchTickets: (params: { query: string; limit?: number; forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
+      login: () => Promise<JiraLoginResult>;
     };
   }
 }

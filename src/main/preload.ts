@@ -15,6 +15,7 @@ type ProjectAPI = {
   getCurrent: () => Promise<unknown>;
   openPath: (params: unknown) => Promise<unknown>;
   openDialog: (params?: unknown) => Promise<unknown>;
+  updateConfig: (params: unknown) => Promise<unknown>;
 };
 
 type TerminalAPI = {
@@ -36,6 +37,7 @@ type TerminalAPI = {
 type JiraAPI = {
   listTickets: (params?: unknown) => Promise<unknown>;
   searchTickets: (params: unknown) => Promise<unknown>;
+  login: () => Promise<unknown>;
 };
 
 const invoke = (channel: string, payload?: unknown) => ipcRenderer.invoke(channel, payload);
@@ -64,6 +66,7 @@ contextBridge.exposeInMainWorld("projectAPI", {
   getCurrent: () => invoke("project:getCurrent"),
   openPath: (params) => invoke("project:openPath", params),
   openDialog: (params) => invoke("project:openDialog", params),
+  updateConfig: (params) => invoke("project:updateConfig", params),
 } satisfies ProjectAPI);
 
 contextBridge.exposeInMainWorld("terminalAPI", {
@@ -85,6 +88,7 @@ contextBridge.exposeInMainWorld("terminalAPI", {
 contextBridge.exposeInMainWorld("jiraAPI", {
   listTickets: (params) => invoke("jira:listTickets", params),
   searchTickets: (params) => invoke("jira:searchTickets", params),
+  login: () => invoke("jira:login"),
 } satisfies JiraAPI);
 
 declare global {

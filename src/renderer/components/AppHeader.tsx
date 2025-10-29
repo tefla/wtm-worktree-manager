@@ -13,6 +13,7 @@ interface AppHeaderProps {
   createWorkspace: Omit<CreateWorkspaceFormProps, "variant">;
   openProjectsInNewWindow: boolean;
   onToggleNewWindow: (value: boolean) => void;
+  onOpenSettings: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -27,6 +28,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   createWorkspace,
   openProjectsInNewWindow,
   onToggleNewWindow,
+  onOpenSettings,
 }) => {
   const hasProjects = recentProjects.length > 0;
   const selectValue = activeProjectPath ?? "";
@@ -72,6 +74,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </label>
           <button className="ghost-button" type="button" onClick={onOpenProject}>
             Open…
+          </button>
+          <button className="ghost-button" type="button" onClick={onOpenSettings} disabled={!activeProjectPath}>
+            Settings
           </button>
           <button
             id="refresh-button"

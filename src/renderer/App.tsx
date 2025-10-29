@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
 import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
   TerminalDefinition,
@@ -15,6 +16,8 @@ import type {
 import { cx } from "./utils/cx";
 import type {
   EnsureTerminalResponse,
+  JiraLoginResult,
+  ProjectConfigPayload,
   ProjectState,
   QuickAccessEntry,
   TerminalDataPayload,
@@ -198,6 +201,11 @@ function App(): JSX.Element {
   const toastIdRef = useRef(0);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
   const [updatingWorkspaces, setUpdatingWorkspaces] = useState<Record<string, boolean>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectConfig, setProjectConfig] = useState<ProjectConfigPayload | null>(null);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [jiraLoginPending, setJiraLoginPending] = useState(false);
+  const [refreshingTicketCache, setRefreshingTicketCache] = useState(false);
 
   const pushToast = useCallback((message: string, kind: ToastKind = "info") => {
     toastIdRef.current += 1;
@@ -206,6 +214,18 @@ function App(): JSX.Element {
     setTimeout(() => {
       setToastList((prev) => prev.filter((toast) => toast.id !== id));
     }, kind === "error" ? 5600 : 4200);
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    if (!activeProjectPath || !projectConfig) {
+      pushToast("Open a project to edit settings", "info");
+      return;
+    }
+    setSettingsOpen(true);
+  }, [activeProjectPath, projectConfig, pushToast]);
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
   }, []);
 
   const handleToggleNewWindow = useCallback((value: boolean) => {
@@ -289,16 +309,17 @@ function App(): JSX.Element {
     }
   }, [activeProjectPath]);
 
-  const loadJiraTickets = useCallback(async (options: { forceRefresh?: boolean } = {}) => {
+  const loadJiraTickets = useCallback(async (options: { forceRefresh?: boolean } = {}): Promise<boolean> => {
     if (!window.jiraAPI?.listTickets) {
       setJiraTickets([]);
-      return;
+      return true;
     }
     try {
-      const response = await window.jiraAPI.listTickets(options);
+      const params = options.forceRefresh ? { forceRefresh: true } : undefined;
+      const response = await window.jiraAPI.listTickets(params);
       if (!Array.isArray(response)) {
         setJiraTickets([]);
-        return;
+        return false;
       }
       const seenKeys = new Set<string>();
       const normalized: JiraTicketSummary[] = [];
@@ -320,10 +341,83 @@ function App(): JSX.Element {
       }
       normalized.sort((a, b) => a.key.localeCompare(b.key));
       setJiraTickets(normalized);
+      return true;
     } catch (error) {
       console.warn("Failed to load Jira ticket cache", error);
+      return false;
     }
   }, []);
+
+  const handleSaveSettings = useCallback(
+    async (config: ProjectConfigPayload) => {
+      if (!activeProjectPath) {
+        pushToast("Open a project to edit settings", "info");
+        return;
+      }
+      setSavingSettings(true);
+      try {
+        const updated = await window.projectAPI.updateConfig(config);
+        applyProjectState(updated, { persistRecent: false });
+        setProjectConfig({ quickAccess: updated.quickAccess, jira: updated.jira });
+        setSettingsOpen(false);
+        pushToast("Project settings saved", "success");
+        const refreshed = await loadJiraTickets({ forceRefresh: true });
+        if (!refreshed) {
+          pushToast("Saved, but failed to refresh Jira ticket cache", "info");
+        }
+      } catch (error) {
+        console.error("Failed to save project settings", error);
+        pushToast("Failed to save project settings", "error");
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [activeProjectPath, applyProjectState, loadJiraTickets, pushToast],
+  );
+
+  const handleJiraLogin = useCallback(async () => {
+    if (!activeProjectPath) {
+      pushToast("Open a project before logging into Jira", "info");
+      return;
+    }
+    if (!window.jiraAPI?.login) {
+      pushToast("Jira integration is not available", "error");
+      return;
+    }
+    setJiraLoginPending(true);
+    try {
+      const result = (await window.jiraAPI.login()) as JiraLoginResult;
+      if (result?.success) {
+        pushToast("Jira login succeeded", "success");
+        const refreshed = await loadJiraTickets({ forceRefresh: true });
+        if (!refreshed) {
+          pushToast("Login ok, but failed to refresh ticket cache", "info");
+        }
+      } else {
+        const message = result?.message || result?.stderr || "Jira login failed";
+        pushToast(message, "error");
+      }
+    } catch (error) {
+      console.error("Failed to login via Jira CLI", error);
+      pushToast("Failed to login to Jira", "error");
+    } finally {
+      setJiraLoginPending(false);
+    }
+  }, [activeProjectPath, loadJiraTickets, pushToast]);
+
+  const handleRefreshTicketCache = useCallback(async () => {
+    setRefreshingTicketCache(true);
+    try {
+      const refreshed = await loadJiraTickets({ forceRefresh: true });
+      if (refreshed) {
+        pushToast("Jira ticket cache refreshed", "success");
+      } else {
+        pushToast("Failed to refresh Jira ticket cache", "error");
+      }
+    } finally {
+      setRefreshingTicketCache(false);
+    }
+  }, [loadJiraTickets, pushToast]);
 
   const applyProjectState = useCallback(
     (state: ProjectState, options: { persistRecent?: boolean } = {}) => {
@@ -332,6 +426,7 @@ function App(): JSX.Element {
       defaultTerminalsRef.current = normalizedQuickAccess;
       setActiveProjectName(state.projectName);
       setActiveProjectPath((current) => (current === state.projectPath ? current : state.projectPath));
+      setProjectConfig({ quickAccess: state.quickAccess, jira: state.jira });
       if (persistRecent) {
         setRecentProjects((current) => {
           const updated = upsertRecentProject(current, { path: state.projectPath, name: state.projectName });
@@ -1438,6 +1533,19 @@ function App(): JSX.Element {
         }}
         openProjectsInNewWindow={openProjectsInNewWindow}
         onToggleNewWindow={handleToggleNewWindow}
+        onOpenSettings={handleOpenSettings}
+      />
+
+      <SettingsPanel
+        open={settingsOpen}
+        initialConfig={projectConfig}
+        saving={savingSettings}
+        loginInProgress={jiraLoginPending}
+        refreshInProgress={refreshingTicketCache}
+        onSave={handleSaveSettings}
+        onClose={closeSettings}
+        onLogin={handleJiraLogin}
+        onRefresh={handleRefreshTicketCache}
       />
 
       <main className="content-shell">

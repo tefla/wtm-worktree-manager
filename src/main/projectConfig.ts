@@ -6,8 +6,19 @@ export interface QuickAccessEntry {
   quickCommand: string;
 }
 
+export interface JiraProjectConfig {
+  enabled: boolean;
+  site: string;
+  profile: string | null;
+  cliPath: string | null;
+  browseUrl: string | null;
+  jql: string;
+  maxResults: number;
+}
+
 export interface ProjectConfig {
   quickAccess: QuickAccessEntry[];
+  jira: JiraProjectConfig;
 }
 
 const DEFAULT_QUICK_ACCESS: QuickAccessEntry[] = [
@@ -27,9 +38,22 @@ function cloneQuickAccess(entries: QuickAccessEntry[]): QuickAccessEntry[] {
   return entries.map((entry) => ({ ...entry }));
 }
 
+export function defaultJiraProjectConfig(): JiraProjectConfig {
+  return {
+    enabled: false,
+    site: "",
+    profile: null,
+    cliPath: null,
+    browseUrl: null,
+    jql: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+    maxResults: 50,
+  };
+}
+
 export function defaultProjectConfig(): ProjectConfig {
   return {
     quickAccess: cloneQuickAccess(DEFAULT_QUICK_ACCESS),
+    jira: defaultJiraProjectConfig(),
   };
 }
 
@@ -39,6 +63,19 @@ function extractString(value: unknown): string | null {
     return trimmed || null;
   }
   return null;
+}
+
+function ensurePositiveInteger(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return fallback;
 }
 
 function slugify(value: string): string {
@@ -87,6 +124,32 @@ function normaliseQuickAccess(list: unknown): QuickAccessEntry[] {
   return normalised;
 }
 
+export function normaliseJiraProjectConfig(raw: unknown): JiraProjectConfig {
+  const defaults = defaultJiraProjectConfig();
+  if (!raw || typeof raw !== "object") {
+    return { ...defaults };
+  }
+
+  const source = raw as Record<string, unknown>;
+  const enabled = Boolean(source.enabled);
+  const site = extractString(source.site) ?? "";
+  const profile = extractString(source.profile);
+  const cliPath = extractString(source.cliPath);
+  const browseUrl = extractString(source.browseUrl);
+  const jql = extractString(source.jql) ?? defaults.jql;
+  const maxResults = ensurePositiveInteger(source.maxResults, defaults.maxResults);
+
+  return {
+    enabled: enabled && Boolean(site),
+    site,
+    profile,
+    cliPath,
+    browseUrl,
+    jql,
+    maxResults,
+  };
+}
+
 export function normaliseProjectConfig(raw: unknown): ProjectConfig {
   if (!raw || typeof raw !== "object") {
     return defaultProjectConfig();
@@ -94,9 +157,11 @@ export function normaliseProjectConfig(raw: unknown): ProjectConfig {
 
   const source = raw as Record<string, unknown>;
   const quickAccess = normaliseQuickAccess(source.quickAccess);
+  const jira = normaliseJiraProjectConfig(source.jira);
 
   return {
     quickAccess,
+    jira,
   };
 }
 

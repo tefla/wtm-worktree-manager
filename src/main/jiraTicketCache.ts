@@ -1,12 +1,9 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { JiraTicketSummary } from "../shared/jira";
 import { ticketMatchesQuery } from "../shared/jira";
-
-const execAsync = promisify(exec);
+import { JiraIntegration } from "./jiraIntegration";
 
 interface CachePayload {
   tickets: JiraTicketSummary[];
@@ -38,14 +35,16 @@ export class JiraTicketCache {
   private cache: CachePayload | null;
   private inflight: Promise<JiraTicketSummary[]> | null;
   private ttlMs: number;
+  private integration: JiraIntegration;
 
-  constructor() {
+  constructor(integration: JiraIntegration) {
     const baseDir = join(homedir(), ".wtm");
     this.cacheFilePath = join(baseDir, "jira-ticket-cache.json");
     this.cache = null;
     this.inflight = null;
     const ttlCandidate = ensurePositiveInteger(process.env.WTM_JIRA_CACHE_TTL);
     this.ttlMs = ttlCandidate > 0 ? ttlCandidate : 5 * 60 * 1000;
+    this.integration = integration;
   }
 
   async listTickets(options: { forceRefresh?: boolean } = {}): Promise<JiraTicketSummary[]> {
@@ -98,21 +97,21 @@ export class JiraTicketCache {
     }
 
     const pending = (async (): Promise<JiraTicketSummary[]> => {
-      const command = extractString(process.env.WTM_JIRA_TICKET_COMMAND);
       const fallback = await this.readCacheFromDisk();
 
-      if (!command) {
+      if (!this.integration.isEnabled()) {
         this.cache = { tickets: fallback.tickets, fetchedAt: Date.now() };
         return this.cache.tickets;
       }
 
       try {
-        const tickets = await this.fetchTicketsFromCommand(command);
-        if (tickets.length > 0) {
+        const rawTickets = await this.integration.fetchTickets();
+        const normalized = this.normalizeTicketList(rawTickets);
+        if (normalized.length > 0) {
           const fetchedAt = Date.now();
-          this.cache = { tickets, fetchedAt };
+          this.cache = { tickets: normalized, fetchedAt };
           await this.writeCacheToDisk(this.cache);
-          return tickets;
+          return normalized;
         }
       } catch (error) {
         console.warn("Failed to refresh Jira ticket cache", error);
@@ -128,22 +127,6 @@ export class JiraTicketCache {
     } finally {
       this.inflight = null;
     }
-  }
-
-  private async fetchTicketsFromCommand(command: string): Promise<JiraTicketSummary[]> {
-    const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
-    const trimmed = stdout.trim();
-    if (!trimmed) {
-      return [];
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch (error) {
-      console.warn("Failed to parse Jira ticket command output", error);
-      return [];
-    }
-    return this.normalizeTicketList(parsed);
   }
 
   private async readCacheFromDisk(): Promise<CachePayload> {
@@ -210,6 +193,9 @@ export class JiraTicketCache {
     }
     return ticket;
   }
-}
 
-export const jiraTicketCache = new JiraTicketCache();
+  invalidate(): void {
+    this.cache = null;
+    this.inflight = null;
+  }
+}

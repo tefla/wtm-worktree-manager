@@ -33,10 +33,33 @@ export interface QuickAccessEntry {
   quickCommand: string;
 }
 
+export interface JiraSettings {
+  enabled: boolean;
+  site: string;
+  profile: string | null;
+  cliPath: string | null;
+  browseUrl: string | null;
+  jql: string;
+  maxResults: number;
+}
+
 export interface ProjectState {
   projectPath: string;
   projectName: string;
   quickAccess: QuickAccessEntry[];
+  jira: JiraSettings;
+}
+
+export interface JiraLoginResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  message?: string;
+}
+
+export interface ProjectConfigPayload {
+  quickAccess: QuickAccessEntry[];
+  jira: JiraSettings;
 }
 
 export interface EnsureTerminalResponse {

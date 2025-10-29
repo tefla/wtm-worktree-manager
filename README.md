@@ -162,12 +162,26 @@ once you've migrated each environment into its project’s `.wtm` directory.
 
 ## Jira Ticket Cache
 
-WTM can suggest workspace names based on Jira tickets. Populate the cache by
-setting `WTM_JIRA_TICKET_COMMAND` to a shell command that outputs a JSON array
-of ticket objects (each with a `key`, `summary`, and optional `url`). The app
-stores the most recent result under `~/.wtm/jira-ticket-cache.json` and refreshes
-it automatically. Override the refresh interval by exporting
-`WTM_JIRA_CACHE_TTL` with a value in milliseconds.
+WTM now manages the Jira cache for you. Open the **Settings** panel from the
+header to configure:
+
+- **Quick access commands** – edit the preset terminal buttons stored in the
+  project's `.wtm/config.json` file.
+- **Jira integration** – enable ticket suggestions driven by the Atlassian CLI
+  (`acli`). Provide your ACLI site name, optional profile or binary path, and
+  the JQL used to pull issues (defaults to `assignee = currentUser() AND
+  statusCategory != Done ORDER BY updated DESC`).
+
+After saving, click **Login with Jira** to run `acli --action login` for the
+configured site. WTM automatically calls `acli --action callRestAPI` to refresh
+the issue list on a schedule and caches the results under
+`~/.wtm/jira-ticket-cache.json`. Use **Refresh Ticket Cache** in the settings
+dialog whenever you need an immediate update. You can still adjust the cache
+TTL by exporting `WTM_JIRA_CACHE_TTL` (milliseconds).
+
+Make sure `acli` is installed and either on your `PATH` or referenced via the
+optional binary path field. The browse URL is used to build clickable links
+back into Jira from the suggestion menu.
 
 ## Notes
 

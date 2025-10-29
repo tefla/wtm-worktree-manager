@@ -6,7 +6,8 @@ import { TerminalSessionStore } from "./terminalSessionStore";
 import { TerminalManager } from "./terminalManager";
 import { ProjectManager } from "./projectManager";
 import { TerminalHostClient } from "./terminalHostClient";
-import { jiraTicketCache } from "./jiraTicketCache";
+import { JiraIntegration } from "./jiraIntegration";
+import { JiraTicketCache } from "./jiraTicketCache";
 
 const isMac = process.platform === "darwin";
 
@@ -16,6 +17,8 @@ interface WindowContext {
   terminalHostClient: TerminalHostClient;
   terminalManager: TerminalManager;
   projectManager: ProjectManager;
+  jiraIntegration: JiraIntegration;
+  jiraTicketCache: JiraTicketCache;
 }
 
 const windowContexts = new Map<number, WindowContext>();
@@ -25,13 +28,17 @@ function createWindowContext(target: BrowserWindow): WindowContext {
   const terminalSessionStore = new TerminalSessionStore();
   const terminalHostClient = new TerminalHostClient();
   const terminalManager = new TerminalManager(terminalSessionStore, terminalHostClient);
-  const projectManager = new ProjectManager(workspaceManager, terminalSessionStore);
+  const jiraIntegration = new JiraIntegration();
+  const jiraTicketCache = new JiraTicketCache(jiraIntegration);
+  const projectManager = new ProjectManager(workspaceManager, terminalSessionStore, jiraIntegration);
   const context: WindowContext = {
     workspaceManager,
     terminalSessionStore,
     terminalHostClient,
     terminalManager,
     projectManager,
+    jiraIntegration,
+    jiraTicketCache,
   };
   windowContexts.set(target.webContents.id, context);
   return context;
@@ -299,22 +306,40 @@ function exposeProjectHandlers() {
       throw error;
     }
   });
+
+  ipcMain.handle("project:updateConfig", async (event, params) => {
+    const context = getContext(event);
+    const state = await context.projectManager.updateConfig(params ?? {});
+    context.jiraTicketCache.invalidate();
+    return state;
+  });
 }
 
 function exposeJiraHandlers() {
-  ipcMain.handle("jira:listTickets", async (_event, params) => {
+  ipcMain.handle("jira:listTickets", async (event, params) => {
+    const context = getContext(event);
     const forceRefresh = Boolean(params?.forceRefresh);
-    return jiraTicketCache.listTickets({ forceRefresh });
+    return context.jiraTicketCache.listTickets({ forceRefresh });
   });
 
-  ipcMain.handle("jira:searchTickets", async (_event, params) => {
+  ipcMain.handle("jira:searchTickets", async (event, params) => {
+    const context = getContext(event);
     const query = typeof params?.query === "string" ? params.query : "";
     const limit = typeof params?.limit === "number" ? params.limit : undefined;
     const forceRefresh = Boolean(params?.forceRefresh);
     if (!query.trim()) {
       return [];
     }
-    return jiraTicketCache.searchTickets(query, { limit, forceRefresh });
+    return context.jiraTicketCache.searchTickets(query, { limit, forceRefresh });
+  });
+
+  ipcMain.handle("jira:login", async (event) => {
+    const context = getContext(event);
+    const result = await context.jiraIntegration.login();
+    if (result.success) {
+      context.jiraTicketCache.invalidate();
+    }
+    return result;
   });
 }
 
