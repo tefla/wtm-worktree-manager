@@ -7,6 +7,7 @@ import { TerminalManager } from "./terminalManager";
 import { ProjectManager } from "./projectManager";
 import { TerminalHostClient } from "./terminalHostClient";
 import { jiraTicketCache } from "./jiraTicketCache";
+import { DockerComposeInspector } from "./dockerComposeInspector";
 
 const isMac = process.platform === "darwin";
 
@@ -16,6 +17,7 @@ interface WindowContext {
   terminalHostClient: TerminalHostClient;
   terminalManager: TerminalManager;
   projectManager: ProjectManager;
+  dockerComposeInspector: DockerComposeInspector;
 }
 
 const windowContexts = new Map<number, WindowContext>();
@@ -25,13 +27,15 @@ function createWindowContext(target: BrowserWindow): WindowContext {
   const terminalSessionStore = new TerminalSessionStore();
   const terminalHostClient = new TerminalHostClient();
   const terminalManager = new TerminalManager(terminalSessionStore, terminalHostClient);
-  const projectManager = new ProjectManager(workspaceManager, terminalSessionStore);
+  const dockerComposeInspector = new DockerComposeInspector();
+  const projectManager = new ProjectManager(workspaceManager, terminalSessionStore, dockerComposeInspector);
   const context: WindowContext = {
     workspaceManager,
     terminalSessionStore,
     terminalHostClient,
     terminalManager,
     projectManager,
+    dockerComposeInspector,
   };
   windowContexts.set(target.webContents.id, context);
   return context;
@@ -209,6 +213,11 @@ function exposeProjectHandlers() {
   ipcMain.handle("project:getCurrent", async (event) => {
     const context = getContext(event);
     return context.projectManager.getCurrentState();
+  });
+
+  ipcMain.handle("project:listComposeServices", async (event) => {
+    const context = getContext(event);
+    return context.projectManager.listComposeServices();
   });
 
   ipcMain.handle("project:openPath", async (event, params) => {
