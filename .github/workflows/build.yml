@@ -12,7 +12,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: linux
+            artifact_name: linux
+          - os: macos-latest
+            target: mac
+            artifact_name: macos
+          - os: windows-latest
+            target: win
+            artifact_name: windows
 
     steps:
       - name: Check out repository
@@ -27,14 +36,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build application
-        run: npm run build
+      - name: Install AppImage dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Package application
+        run: npm run package -- --${{ matrix.target }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.os }}
-          path: dist
+          name: release-${{ matrix.artifact_name }}
+          path: release
           if-no-files-found: error
 
   release:
@@ -62,21 +77,16 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Archive release artifacts
-        run: |
-          for dir in release-artifacts/*; do
-            if [ -d "$dir" ]; then
-              name=$(basename "$dir")
-              (cd "$dir" && zip -r "../${name}.zip" .)
-            fi
-          done
-
       - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.release_meta.outputs.tag }}
           name: ${{ steps.release_meta.outputs.name }}
-          files: release-artifacts/*.zip
+          files: |
+            release-artifacts/**/*.AppImage
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.exe
+            release-artifacts/**/*.zip
           draft: false
           prerelease: false
         env:
