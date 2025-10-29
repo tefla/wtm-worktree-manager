@@ -66,7 +66,11 @@ src/
 │   ├── preload.ts           # Secure bridge exposing workspace & project APIs
 │   ├── projectConfig.ts     # Project config normalisation helpers
 │   ├── projectManager.ts    # Handles `.wtm` detection/creation per project
-│   ├── terminalManager.ts   # node-pty orchestration
+│   ├── terminalHost.ts      # Detached PTY host process keeping sessions alive
+│   ├── terminalHostClient.ts  # Socket client used by the main process
+│   ├── terminalHostPaths.ts   # Helpers for locating the host socket/binaries
+│   ├── terminalHostProtocol.ts
+│   ├── terminalManager.ts   # Main-process terminal orchestration and IPC
 │   ├── terminalSessionStore.ts
 │   └── workspaceManager.ts  # Git + worktree orchestration
 └── renderer/
@@ -114,6 +118,21 @@ they will be picked up on the next refresh.
 
 `terminals.json` stores the terminal history per workspace so that reopening a
 workspace restores its tabs. It is safe to delete when you want to start fresh.
+
+### Detached terminal sessions
+
+Terminal tabs now run inside a lightweight, detached Node.js host process. The
+host is spawned on demand the first time a terminal is opened, listens on
+`~/.wtm/terminal-host.sock` (or `\\?\pipe\wtm-terminal-host` on Windows), and
+keeps each PTY alive even after the main Electron window closes. When you
+relaunch WTM the renderer reattaches to the existing PTYs, pulls any buffered
+output that accumulated while the UI was closed, and resumes streaming in real
+time.
+
+The host automatically exits once there are no active sessions or connected
+clients for roughly one minute. If you ever need to forcefully clean up
+everything, simply close the app, wait for the idle timeout, and remove the
+project's `.wtm/terminals.json` file for a completely fresh slate.
 
 WTM persists the list of recently opened projects locally, making it quick to
 switch between repositories without re-browsing the filesystem.

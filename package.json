@@ -13,8 +13,8 @@
     "dev": "node scripts/ensure-node-pty.cjs && npm run build && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron . --disable-gpu --disable-software-rasterizer",
     "start": "npm run dev",
     "package": "npm run build && npx --yes electron-builder@25.1.8 --publish never",
-    "test:unit": "npm run build:main && node --test tests/unit",
-    "test:e2e": "playwright test",
+    "test:unit": "npm run build:main && node --test \"tests/unit/**/*.js\"",
+    "test:e2e": "npm run build && PW_TEST_WORKER_TEARDOWN_TIMEOUT=0 playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },
   "dependencies": {
