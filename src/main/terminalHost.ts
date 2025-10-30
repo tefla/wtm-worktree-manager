@@ -439,17 +439,10 @@ class TerminalHostServer {
     session.subscribers.add(client);
     client.subscribedSessions.add(session.id);
 
-    let restoredOutput = "";
-    if (!ensureResult.created && !sessionWasTracked) {
-      restoredOutput = await tmux.captureSession(tmuxSessionName, HISTORY_LIMIT);
-    }
-
     const pending = session.pendingOutput;
     session.pendingOutput = "";
 
     this.evaluateIdle();
-
-    const combined = `${restoredOutput}${pending}`.slice(-HISTORY_LIMIT);
 
     return {
       sessionId: session.id,
@@ -458,7 +451,7 @@ class TerminalHostServer {
       command: session.command,
       args: session.args,
       existing: !ensureResult.created,
-      pendingOutput: combined,
+      pendingOutput: pending,
     };
   }
 
