@@ -1,7 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage } from "electron";
-import { readFileSync } from "node:fs";
-import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
+import type { IpcMainEvent, IpcMainInvokeEvent, NativeImage } from "electron";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
 import { TerminalManager } from "./terminalManager";
@@ -16,25 +18,13 @@ import { registerProjectHandlers } from "./ipc/projectHandlers";
 import { WorkspaceService } from "./services/workspaceService";
 import { TerminalService } from "./services/terminalService";
 import { ProjectService } from "./services/projectService";
+import type { ProjectState } from "../shared/ipc";
 
 const isMac = process.platform === "darwin";
 const iconPath = path.join(__dirname, "../assets/app-icon.svg");
-function loadAppIcon(): Electron.NativeImage | undefined {
-  try {
-    const svgContent = readFileSync(iconPath, "utf8");
-    const base64 = Buffer.from(svgContent).toString("base64");
-    const dataUrl = `data:image/svg+xml;base64,${base64}`;
-    const image = nativeImage.createFromDataURL(dataUrl);
-    if (!image.isEmpty()) {
-      return image;
-    }
-  } catch (error) {
-    console.warn("Failed to load SVG app icon, falling back to default Electron icon.", error);
-  }
-  const fallback = nativeImage.createFromPath(iconPath);
-  return fallback.isEmpty() ? undefined : fallback;
-}
-const appIcon = loadAppIcon();
+const defaultAppIcon = loadIconFromFile(iconPath);
+const windowIconKeys = new Map<number, string>();
+const iconWarningCache = new Set<string>();
 
 interface WindowContext {
   workspaceManager: WorkspaceManager;
@@ -60,6 +50,14 @@ function createWindowContext(target: BrowserWindow): WindowContext {
   const dockerComposeInspector = new DockerComposeInspector();
   const projectManager = new ProjectManager(workspaceManager, terminalSessionStore, dockerComposeInspector);
   const projectService = new ProjectService(projectManager);
+  applyWindowIcon(target, null);
+  projectService.registerStateTransform((state) => {
+    applyWindowIcon(target, state);
+    return state;
+  });
+  void projectService.getCurrentState().catch((error) => {
+    console.warn("Failed to hydrate project state during window initialisation", error);
+  });
   const context: WindowContext = {
     workspaceManager,
     workspaceService,
@@ -95,7 +93,7 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 640,
     backgroundColor: "#0f172a",
     title: "WTM (WorkTree Manager)",
-    icon: appIcon,
+    icon: defaultAppIcon ?? undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -112,6 +110,7 @@ async function createWindow(): Promise<BrowserWindow> {
       console.error("Failed to flush terminal sessions on window close", error);
     });
     windowContexts.delete(webContentsId);
+    windowIconKeys.delete(webContentsId);
   });
 
   await window.loadFile(path.join(__dirname, "../renderer/index.html"));
@@ -171,8 +170,8 @@ app.whenReady().then(async () => {
   });
   exposeJiraHandlers();
   await createWindow();
-  if (isMac && appIcon) {
-    app.dock.setIcon(appIcon);
+  if (isMac && defaultAppIcon) {
+    app.dock.setIcon(defaultAppIcon);
   }
 
   app.on("activate", async () => {
@@ -187,3 +186,99 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+function loadIconFromFile(filePath: string): NativeImage | undefined {
+  try {
+    if (!existsSync(filePath)) {
+      return undefined;
+    }
+    const extension = path.extname(filePath).toLowerCase();
+    if (extension === ".svg") {
+      const svgContent = readFileSync(filePath, "utf8");
+      const base64 = Buffer.from(svgContent).toString("base64");
+      const dataUrl = `data:image/svg+xml;base64,${base64}`;
+      const image = nativeImage.createFromDataURL(dataUrl);
+      return image.isEmpty() ? undefined : image;
+    }
+    const image = nativeImage.createFromPath(filePath);
+    return image.isEmpty() ? undefined : image;
+  } catch (error) {
+    console.warn(`Failed to load icon from ${filePath}`, error);
+    return undefined;
+  }
+}
+
+function looksLikeFilePath(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return (
+    value.startsWith("file://") ||
+    value.startsWith("~") ||
+    path.isAbsolute(value) ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    /\.[a-zA-Z0-9]{1,4}$/.test(value)
+  );
+}
+
+function resolveIconPath(rawValue: string, projectPath: string | null): string {
+  if (rawValue.startsWith("file://")) {
+    try {
+      return fileURLToPath(rawValue);
+    } catch (error) {
+      console.warn("Failed to resolve file:// project icon path", error);
+    }
+  }
+  if (rawValue.startsWith("~")) {
+    return path.join(homedir(), rawValue.slice(1));
+  }
+  if (path.isAbsolute(rawValue) || !projectPath) {
+    return rawValue;
+  }
+  return path.resolve(projectPath, rawValue);
+}
+
+function pickWindowIcon(state: ProjectState | null): { image: NativeImage | undefined; key: string } {
+  const iconValue = state?.projectIcon?.trim();
+  if (!iconValue) {
+    return { image: defaultAppIcon, key: "default" };
+  }
+  if (iconValue.startsWith("data:")) {
+    const image = nativeImage.createFromDataURL(iconValue);
+    if (!image.isEmpty()) {
+      return { image, key: `data:${iconValue.slice(0, 32)}` };
+    }
+    console.warn("Failed to decode data URL project icon; falling back to default icon.");
+    return { image: defaultAppIcon, key: "default" };
+  }
+  if (looksLikeFilePath(iconValue)) {
+    const projectPath = state?.projectPath ?? null;
+    const resolved = resolveIconPath(iconValue, projectPath);
+    const image = loadIconFromFile(resolved);
+    if (image) {
+      return { image, key: `file:${resolved}` };
+    }
+    if (!iconWarningCache.has(resolved)) {
+      console.warn(`Failed to load project icon from ${resolved}; falling back to default icon.`);
+      iconWarningCache.add(resolved);
+    }
+    return { image: defaultAppIcon, key: "default" };
+  }
+  return { image: defaultAppIcon, key: "default" };
+}
+
+function applyWindowIcon(target: BrowserWindow, state: ProjectState | null): void {
+  const { image, key } = pickWindowIcon(state);
+  const previousKey = windowIconKeys.get(target.webContents.id);
+  if (previousKey === key) {
+    return;
+  }
+  if (image) {
+    target.setIcon(image);
+    if (isMac) {
+      app.dock.setIcon(image);
+    }
+  }
+  windowIconKeys.set(target.webContents.id, key);
+}

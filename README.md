@@ -95,7 +95,8 @@ that appear for every workspace in that project:
 ```
 
 Set the `icon` to any short string (emoji or text) to display it beside the project name and in the selector,
-or leave it empty to hide it. Update the quick access list to match the commands you want in your project.
+or provide a relative/absolute path (or `file://` URL) to an image file to promote it to the application/window icon for that project.
+Leave the value empty to hide it. Update the quick access list to match the commands you want in your project.
 Use an empty array if you prefer to rely entirely on ad-hoc terminals. WTM normalises keys for uniqueness
 automatically.
 
