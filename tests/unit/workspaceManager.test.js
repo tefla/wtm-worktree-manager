@@ -197,6 +197,88 @@ test("WorkspaceManager.createWorkspace defaults base ref to current repo branch"
   await fs.rm(repoDir, { recursive: true, force: true });
 });
 
+test("WorkspaceManager.createWorkspace normalises branch input", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+  const gitCalls = [];
+  const rawBranch = "Agent Mode - Supercharge WTM with OpenAi Agent SDK";
+  const branchName = "agent-mode-supercharge-wtm-with-openai-agent-sdk";
+  const worktreePath = path.resolve(path.join(workspaceRoot, branchName));
+
+  manager.getWorktreeEntries = async () => [];
+  manager.buildWorkspace = async (entry) => {
+    assert.equal(entry.branch, branchName);
+    assert.equal(entry.path, worktreePath);
+    return {
+      id: entry.branch ?? entry.path,
+      branch: entry.branch,
+      path: entry.path,
+      relativePath: entry.branch ?? entry.path,
+      headSha: entry.headSha ?? "unknown",
+      status: {
+        clean: true,
+        ahead: 0,
+        behind: 0,
+        changeCount: 0,
+        summary: "No changes",
+        sampleChanges: [],
+      },
+      kind: "worktree",
+    };
+  };
+
+  manager.git = async (args) => {
+    gitCalls.push(args);
+    const command = args.join(" ");
+
+    if (command === "fetch origin") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    if (command === `rev-parse --verify ${branchName}`) {
+      return { stdout: "", stderr: "", exitCode: 1 };
+    }
+
+    if (command === `ls-remote --exit-code --heads origin ${branchName}`) {
+      return { stdout: "", stderr: "", exitCode: 1 };
+    }
+
+    if (command === "rev-parse --abbrev-ref HEAD") {
+      return { stdout: "main\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "rev-parse HEAD") {
+      return { stdout: "abc123\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "remote") {
+      return { stdout: "origin\n", stderr: "", exitCode: 0 };
+    }
+
+    if (command === "fetch origin main") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    if (command === `worktree add -b ${branchName} ${worktreePath} main`) {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    throw new Error(`Unexpected git command: ${command}`);
+  };
+
+  try {
+    const workspace = await manager.createWorkspace({ branch: rawBranch });
+    assert.equal(workspace.branch, branchName);
+    const addCall = gitCalls.find((call) => call[0] === "worktree" && call[1] === "add");
+    assert.ok(addCall, "should add git worktree");
+    assert.equal(addCall[3], branchName);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+    await fs.rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test("WorkspaceManager.createWorkspace returns existing worktree when branch already registered", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));

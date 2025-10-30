@@ -9,6 +9,7 @@ import type {
   WorkspaceDeleteResponse,
   WorkspaceCreateRequest,
 } from "../shared/ipc";
+import { normalizeBranchName } from "../shared/branch";
 import { GitCommandError, pathExists, runGitCommand, type GitCommandResult } from "./services/gitService";
 
 export interface WorktreeEntry {
@@ -416,7 +417,7 @@ export class WorkspaceManager {
 
   async createWorkspace(params: WorkspaceCreateRequest): Promise<WorkspaceSummary> {
     this.ensureConfigured();
-    const branchName = params.branch.trim();
+    const branchName = normalizeBranchName(params.branch, { fallback: "" });
     if (!branchName) {
       throw new Error("Branch name is required.");
     }
