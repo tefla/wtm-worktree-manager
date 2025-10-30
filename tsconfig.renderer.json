@@ -8,6 +8,8 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "sourceMap": true,
+    "inlineSources": true,
     "jsx": "react-jsx",
     "baseUrl": "./src"
   },

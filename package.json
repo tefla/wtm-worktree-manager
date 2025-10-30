@@ -15,7 +15,8 @@
     "package": "npm run build && npx --yes electron-builder@25.1.8 --publish never",
     "test:unit": "npm run build:main && node --test \"tests/unit/**/*.js\" && rm -rf tmp/renderer-tests && npx tsc -p tsconfig.renderer.test.json && node --test tests/unit/rendererStore.spec.mjs",
     "test:e2e": "npm run build && PW_TEST_WORKER_TEARDOWN_TIMEOUT=0 playwright test",
-    "test": "npm run test:unit && npm run test:e2e"
+    "test": "npm run test:unit && npm run test:e2e",
+    "coverage": "NODE_OPTIONS=--enable-source-maps npx --yes c8 --reporter=text --reporter=lcov npm run test:unit"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.9.2",
