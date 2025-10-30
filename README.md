@@ -110,12 +110,26 @@ once you've migrated each environment into its project’s `.wtm` directory.
 
 ## Jira Ticket Cache
 
-WTM can suggest workspace names based on Jira tickets. Populate the cache by
-setting `WTM_JIRA_TICKET_COMMAND` to a shell command that outputs a JSON array
-of ticket objects (each with a `key`, `summary`, and optional `url`). The app
-stores the most recent result under `~/.wtm/jira-ticket-cache.json` and refreshes
-it automatically. Override the refresh interval by exporting
-`WTM_JIRA_CACHE_TTL` with a value in milliseconds.
+WTM now manages the Jira ticket cache automatically. When the Atlassian CLI
+(`acli`) is available on your `PATH`, the app invokes it with
+`getIssueList` (default JQL: `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`)
+to pull tickets and stores the result in `~/.wtm/jira-ticket-cache.json`. The
+cache is refreshed on demand so you never have to run a command manually.
+
+Advanced tweaks (all optional):
+
+- `WTM_JIRA_TICKET_COMMAND` accepts a custom JSON-emitting command and overrides `acli`
+- `WTM_JIRA_CACHE_TTL` sets the in-memory cache lifetime (milliseconds)
+- `WTM_JIRA_ACLI_QUERY`, `WTM_JIRA_ACLI_PROJECT`, `WTM_JIRA_ACLI_COLUMNS`, `WTM_JIRA_ACLI_LIMIT`
+  adjust the CLI query and projected fields
+- `WTM_JIRA_ACLI_SITE`/`WTM_JIRA_ACLI_SERVER`, `WTM_JIRA_ACLI_PROFILE` steer the CLI to a
+  specific connection profile
+- `WTM_JIRA_ACLI_BINARY`, `WTM_JIRA_ACLI_EXTRA_ARGS` customise the binary/flags that are
+  executed
+- `WTM_JIRA_DISABLE_ACLI` / `WTM_JIRA_ACLI_DISABLED` disable the automatic CLI integration
+
+WTM still honours data previously written to `~/.wtm/jira-ticket-cache.json`, so
+existing caches migrate seamlessly.
 
 ## Notes
 
