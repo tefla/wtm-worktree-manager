@@ -30,7 +30,12 @@ export function loadRecentProjects(): RecentProject[] {
         return;
       }
       const name = typeof (entry as RecentProject).name === "string" ? (entry as RecentProject).name.trim() : "";
-      projects.push({ path, name: name || path });
+      const iconCandidate = (entry as { icon?: unknown }).icon;
+      const icon =
+        typeof iconCandidate === "string" && iconCandidate.trim()
+          ? iconCandidate.trim()
+          : null;
+      projects.push({ path, name: name || path, icon });
     });
     return projects;
   } catch (error) {
@@ -46,7 +51,13 @@ export function persistRecentProjects(projects: RecentProject[]): void {
   try {
     window.localStorage.setItem(
       RECENT_PROJECTS_STORAGE_KEY,
-      JSON.stringify(projects.slice(0, MAX_RECENT_PROJECTS)),
+      JSON.stringify(
+        projects.slice(0, MAX_RECENT_PROJECTS).map((project) => ({
+          path: project.path,
+          name: project.name,
+          ...(project.icon ? { icon: project.icon } : { icon: null }),
+        })),
+      ),
     );
   } catch (error) {
     console.error("Failed to persist recent projects", error);

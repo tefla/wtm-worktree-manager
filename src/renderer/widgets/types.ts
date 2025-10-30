@@ -40,6 +40,7 @@ export interface WidgetRenderContext {
   project: {
     activePath: string | null;
     activeName: string;
+    activeIcon: string | null;
     recentProjects: RecentProject[];
   };
   workspaceRowActions: WorkspaceRowActionDefinition[];

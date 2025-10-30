@@ -64,6 +64,7 @@ export interface QuickAccessEntry {
 export interface ProjectState {
   projectPath: string;
   projectName: string;
+  projectIcon: string | null;
   quickAccess: QuickAccessEntry[];
   composeProjectName: string | null;
   composeServices: DockerComposeServiceInfo[];
@@ -72,6 +73,7 @@ export interface ProjectState {
 }
 
 export interface ProjectConfig {
+  icon: string | null;
   quickAccess: QuickAccessEntry[];
 }
 

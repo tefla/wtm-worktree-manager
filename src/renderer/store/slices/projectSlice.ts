@@ -7,6 +7,7 @@ import { loadPreferences, loadRecentProjects, persistPreferences, persistRecentP
 export interface ProjectFeatureState {
   activeProjectPath: string | null;
   activeProjectName: string;
+  activeProjectIcon: string | null;
   recentProjects: RecentProject[];
   composeProjectName: string | null;
   composeServices: DockerComposeServiceInfo[];
@@ -21,6 +22,7 @@ const persistedPreferences = loadPreferences();
 const initialState: ProjectFeatureState = {
   activeProjectPath: null,
   activeProjectName: "",
+  activeProjectIcon: null,
   recentProjects: persistedProjects,
   composeProjectName: null,
   composeServices: [],
@@ -38,6 +40,9 @@ const projectSlice = createSlice({
     },
     setActiveProjectName(state, action: PayloadAction<string>) {
       state.activeProjectName = action.payload;
+    },
+    setActiveProjectIcon(state, action: PayloadAction<string | null>) {
+      state.activeProjectIcon = action.payload;
     },
     setRecentProjects(state, action: PayloadAction<RecentProject[]>) {
       state.recentProjects = action.payload;
@@ -78,6 +83,7 @@ const projectSlice = createSlice({
     applyProjectState(state, action: PayloadAction<ProjectSnapshot>) {
       state.activeProjectPath = action.payload.projectPath;
       state.activeProjectName = action.payload.projectName;
+      state.activeProjectIcon = action.payload.projectIcon ?? null;
       state.composeProjectName = action.payload.composeProjectName ?? null;
       state.composeServices = action.payload.composeServices;
       state.composeError = action.payload.composeError ?? null;
@@ -89,6 +95,7 @@ const projectSlice = createSlice({
       state.composeError = null;
       state.activeProjectPath = null;
       state.activeProjectName = "";
+      state.activeProjectIcon = null;
     },
   },
 });
@@ -96,6 +103,7 @@ const projectSlice = createSlice({
 export const {
   setActiveProjectPath,
   setActiveProjectName,
+  setActiveProjectIcon,
   setRecentProjects,
   addRecentProject,
   setComposeProjectName,

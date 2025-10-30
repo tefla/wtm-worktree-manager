@@ -3,11 +3,13 @@ import { cx } from "../utils/cx";
 import type { QuickAccessDraft } from "../stateTypes";
 
 interface SettingsOverlayProps {
+  icon: string;
   quickAccess: QuickAccessDraft[];
   saving: boolean;
   error: string | null;
   onRequestClose: () => void;
   onSubmit: () => void;
+  onIconChange: (value: string) => void;
   onEntryAdd: () => void;
   onEntryChange: (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => void;
   onEntryRemove: (id: string) => void;
@@ -15,11 +17,13 @@ interface SettingsOverlayProps {
 }
 
 export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
+  icon,
   quickAccess,
   saving,
   error,
   onRequestClose,
   onSubmit,
+  onIconChange,
   onEntryAdd,
   onEntryChange,
   onEntryRemove,
@@ -48,7 +52,24 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             ×
           </button>
         </div>
-        <p className="dialog-message">Adjust the quick access commands available for this project.</p>
+        <p className="dialog-message">
+          Choose a project icon and adjust the quick access commands available for this project.
+        </p>
+        <div className="settings-section">
+          <h3>Project Icon</h3>
+          <label className="settings-field">
+            <span>Icon</span>
+            <input
+              type="text"
+              value={icon}
+              onChange={(event) => onIconChange(event.target.value)}
+              placeholder="e.g. 🚀 or path/to/icon.png"
+              autoComplete="off"
+              disabled={saving}
+            />
+            <span className="settings-field-note">Shown next to the project name and in the project picker.</span>
+          </label>
+        </div>
         <div className="settings-section">
           <h3>Quick Access Commands</h3>
           {hasEntries ? (
