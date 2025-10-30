@@ -22,6 +22,7 @@ import {
   TerminalHostResponseMessage,
 } from "./terminalHostProtocol";
 import { getHostSocketPath } from "./terminalHostPaths";
+import { TmuxController } from "./tmuxController";
 
 const useFakePty = process.env.WTM_FAKE_PTY === "1";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -76,6 +77,7 @@ interface SessionDescriptor {
   slot: string;
   command: string;
   args: string[];
+  tmuxSession: string | null;
   pty: PtyAdapter;
   subscribers: Set<ClientDescriptor>;
   pendingOutput: string;
@@ -104,6 +106,7 @@ class TerminalHostServer {
   private storePath: string | null;
   private shutdownTimer: NodeJS.Timeout | null;
   private readonly useFakePty: boolean;
+  private readonly tmux: TmuxController | null;
 
   constructor(private readonly socketPath: string) {
     this.server = null;
@@ -113,6 +116,16 @@ class TerminalHostServer {
     this.storePath = null;
     this.shutdownTimer = null;
     this.useFakePty = useFakePty;
+    this.tmux = this.useFakePty ? null : new TmuxController((level, message) => this.log(level, message));
+    if (!this.useFakePty) {
+      try {
+        this.tmux?.assertAvailable();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.log("error", reason);
+        throw error;
+      }
+    }
   }
 
   start(): void {
@@ -208,7 +221,7 @@ class TerminalHostServer {
           this.sendResponse(client, { type: "response", id, ok: true, result: { ok: true } });
           break;
         case "ensureSession": {
-          const result = this.ensureSession(client, payload as HostEnsureSessionPayload);
+          const result = await this.ensureSession(client, payload as HostEnsureSessionPayload);
           this.sendResponse(client, { type: "response", id, ok: true, result });
           break;
         }
@@ -265,7 +278,16 @@ class TerminalHostServer {
     }
   }
 
-  private ensureSession(client: ClientDescriptor, payload: HostEnsureSessionPayload): HostEnsureSessionResult {
+  private async ensureSession(client: ClientDescriptor, payload: HostEnsureSessionPayload): Promise<HostEnsureSessionResult> {
+    return await (this.useFakePty || !this.tmux
+      ? this.ensureSessionWithPty(client, payload)
+      : this.ensureSessionWithTmux(client, payload, this.tmux));
+  }
+
+  private async ensureSessionWithPty(
+    client: ClientDescriptor,
+    payload: HostEnsureSessionPayload,
+  ): Promise<HostEnsureSessionResult> {
     const { workspacePath, slot, command, args = [], cols, rows, env = {} } = payload;
     if (!workspacePath || !slot) {
       throw new Error("workspacePath and slot are required");
@@ -292,7 +314,8 @@ class TerminalHostServer {
     }
 
     const sessionId = randomUUID();
-    const ptyProcess = this.createPty(command, args.length > 0 ? args : this.defaultShellArgs(command), {
+    const finalArgs = args.length > 0 ? args : this.defaultShellArgs(command);
+    const ptyProcess = this.createPty(command, finalArgs, {
       cols,
       rows,
       cwd: workspacePath,
@@ -307,7 +330,8 @@ class TerminalHostServer {
       workspacePath,
       slot,
       command,
-      args: args.length > 0 ? args : this.defaultShellArgs(command),
+      args: finalArgs,
+      tmuxSession: null,
       pty: ptyProcess,
       subscribers: new Set([client]),
       pendingOutput: "",
@@ -335,6 +359,106 @@ class TerminalHostServer {
       args: session.args,
       existing: false,
       pendingOutput: "",
+    };
+  }
+
+  private async ensureSessionWithTmux(
+    client: ClientDescriptor,
+    payload: HostEnsureSessionPayload,
+    tmux: TmuxController,
+  ): Promise<HostEnsureSessionResult> {
+    const { workspacePath, slot, command, args = [], cols, rows, env = {} } = payload;
+    if (!workspacePath || !slot) {
+      throw new Error("workspacePath and slot are required");
+    }
+    const key = this.sessionKey(workspacePath, slot);
+    const existingSessionId = this.sessionIndex.get(key);
+    const finalArgs = args.length > 0 ? args : this.defaultShellArgs(command);
+
+    let session: SessionDescriptor | undefined;
+    if (existingSessionId) {
+      const existing = this.sessions.get(existingSessionId);
+      if (existing && !existing.disposed) {
+        session = existing;
+      }
+    }
+    const sessionWasTracked = Boolean(session);
+
+    const tmuxSessionName = tmux.buildSessionName(workspacePath, slot);
+    const ensureResult = await tmux.ensureSession(tmuxSessionName, {
+      cwd: workspacePath,
+      command,
+      args: finalArgs,
+      env: {
+        ...process.env,
+        ...env,
+      },
+    });
+
+    if (!session) {
+      const sessionId = randomUUID();
+      const ptyProcess = this.createPty("tmux", ["attach-session", "-t", tmuxSessionName], {
+        cols,
+        rows,
+        cwd: workspacePath,
+        env: {
+          ...process.env,
+          ...env,
+        },
+      });
+
+      session = {
+        id: sessionId,
+        workspacePath,
+        slot,
+        command,
+        args: finalArgs,
+        tmuxSession: tmuxSessionName,
+        pty: ptyProcess,
+        subscribers: new Set(),
+        pendingOutput: "",
+        disposed: false,
+      };
+
+      ptyProcess.onData((data: string) => {
+        this.forwardData(session as SessionDescriptor, data);
+      });
+
+      ptyProcess.onExit((event) => {
+        this.forwardExit(session as SessionDescriptor, event);
+      });
+
+      this.sessions.set(sessionId, session);
+      this.sessionIndex.set(key, sessionId);
+    } else {
+      session.command = command;
+      session.args = finalArgs;
+      session.tmuxSession = tmuxSessionName;
+    }
+
+    session.subscribers.add(client);
+    client.subscribedSessions.add(session.id);
+
+    let restoredOutput = "";
+    if (!ensureResult.created && !sessionWasTracked) {
+      restoredOutput = await tmux.captureSession(tmuxSessionName, HISTORY_LIMIT);
+    }
+
+    const pending = session.pendingOutput;
+    session.pendingOutput = "";
+
+    this.evaluateIdle();
+
+    const combined = `${restoredOutput}${pending}`.slice(-HISTORY_LIMIT);
+
+    return {
+      sessionId: session.id,
+      workspacePath,
+      slot,
+      command: session.command,
+      args: session.args,
+      existing: !ensureResult.created,
+      pendingOutput: combined,
     };
   }
 
@@ -366,10 +490,19 @@ class TerminalHostServer {
     const key = this.sessionKey(session.workspacePath, session.slot);
     this.sessionIndex.delete(key);
     this.sessions.delete(session.id);
+    session.disposed = true;
     try {
       session.pty.kill();
     } catch (error) {
       this.log("warn", `Failed to kill pty for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (session.tmuxSession && this.tmux) {
+      void this.tmux.killSession(session.tmuxSession).catch((error) => {
+        this.log(
+          "warn",
+          `Failed to ensure tmux session cleanup for ${session.tmuxSession}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
     }
     this.evaluateIdle();
   }
@@ -407,6 +540,16 @@ class TerminalHostServer {
         session.pty.kill();
       } catch (error) {
         this.log("warn", `Failed to dispose session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (session.tmuxSession && this.tmux) {
+        try {
+          await this.tmux.killSession(session.tmuxSession);
+        } catch (error) {
+          this.log(
+            "warn",
+            `Failed to dispose tmux session ${session.tmuxSession}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
     }
     this.sessions.delete(payload.sessionId);

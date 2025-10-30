@@ -3,6 +3,8 @@ import path from "node:path";
 import { TerminalHostClient } from "./terminalHostClient";
 import { TerminalSessionStore, TerminalState, WorkspaceTerminalState } from "./terminalSessionStore";
 
+const HISTORY_LIMIT = 40000;
+
 function resolveCommand(command: string): string {
   if (process.platform === "win32") {
     if (command.endsWith(".cmd") || command.endsWith(".exe")) {
@@ -154,8 +156,11 @@ export class TerminalManager {
     let history = previousHistory;
     const pending = hostResult.pendingOutput ?? "";
     if (pending) {
-      await this.store.appendHistory(absPath, slot, pending);
-      history = `${history}${pending}`;
+      const delta = this.computeHistoryDelta(previousHistory, pending);
+      if (delta) {
+        await this.store.appendHistory(absPath, slot, delta);
+        history = `${history}${delta}`.slice(-HISTORY_LIMIT);
+      }
     }
 
     return {
@@ -324,5 +329,26 @@ export class TerminalManager {
     const workspaceIndex = this.workspaceIndex.get(binding.workspacePath);
     workspaceIndex?.delete(binding.slot);
     this.sessions.delete(sessionId);
+  }
+
+  private computeHistoryDelta(previous: string, incoming: string): string {
+    if (!incoming) return "";
+    if (!previous) return incoming;
+    const window = previous.slice(Math.max(0, previous.length - incoming.length));
+    const separator = "\u0000";
+    const combined = `${incoming}${separator}${window}`;
+    const prefix: number[] = new Array(combined.length).fill(0);
+    for (let i = 1; i < combined.length; i += 1) {
+      let j = prefix[i - 1];
+      while (j > 0 && combined[i] !== combined[j]) {
+        j = prefix[j - 1];
+      }
+      if (combined[i] === combined[j]) {
+        j += 1;
+      }
+      prefix[i] = j;
+    }
+    const overlap = prefix[combined.length - 1];
+    return incoming.slice(overlap);
   }
 }
