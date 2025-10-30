@@ -43,6 +43,7 @@ import {
 } from "./store/slices/workspacesSlice";
 import {
   setActiveProjectName,
+  setActiveProjectIcon,
   setActiveProjectPath,
   addRecentProject,
   setComposeProjectName,
@@ -118,6 +119,7 @@ function App(): JSX.Element {
     recentProjects,
     activeProjectPath,
     activeProjectName,
+    activeProjectIcon,
     composeProjectName,
     composeServices,
     composeError,
@@ -311,6 +313,7 @@ function App(): JSX.Element {
       const normalizedQuickAccess = normaliseQuickAccessList(state.quickAccess, { fallbackToDefault: true });
       defaultTerminalsRef.current = normalizedQuickAccess;
       dispatch(setActiveProjectName(state.projectName));
+      dispatch(setActiveProjectIcon(state.projectIcon ?? null));
       dispatch(setComposeProjectName(state.composeProjectName ?? null));
       dispatch(setComposeServices(normaliseComposeServices(state.composeServices)));
       dispatch(setComposeError(state.composeError ?? null));
@@ -319,7 +322,13 @@ function App(): JSX.Element {
         dispatch(setActiveProjectPath(state.projectPath));
       }
       if (persistRecent) {
-        dispatch(addRecentProject({ path: state.projectPath, name: state.projectName }));
+        dispatch(
+          addRecentProject({
+            path: state.projectPath,
+            name: state.projectName,
+            icon: state.projectIcon ?? null,
+          }),
+        );
       }
     },
     [activeProjectPath, dispatch],
@@ -336,7 +345,13 @@ function App(): JSX.Element {
         const state = await projectAPI.openPath({ path: trimmed, openInNewWindow });
         if (openInNewWindow) {
           if (state) {
-            dispatch(addRecentProject({ path: state.projectPath, name: state.projectName }));
+            dispatch(
+              addRecentProject({
+                path: state.projectPath,
+                name: state.projectName,
+                icon: state.projectIcon ?? null,
+              }),
+            );
             if (!silent) {
               pushToast(`Project opened in new window: ${state.projectName}`, "success");
             }
@@ -364,7 +379,13 @@ function App(): JSX.Element {
       const state = await projectAPI.openDialog({ openInNewWindow });
       if (openInNewWindow) {
         if (state) {
-          dispatch(addRecentProject({ path: state.projectPath, name: state.projectName }));
+          dispatch(
+            addRecentProject({
+              path: state.projectPath,
+              name: state.projectName,
+              icon: state.projectIcon ?? null,
+            }),
+          );
           pushToast(`Project opened in new window: ${state.projectName}`, "success");
         }
         return;
@@ -616,6 +637,7 @@ function App(): JSX.Element {
     settingsDraft,
     settingsSaving,
     settingsError,
+    settingsIcon,
     openSettingsOverlay,
     closeSettingsOverlay,
     updateSettingsEntry,
@@ -623,11 +645,13 @@ function App(): JSX.Element {
     moveSettingsEntry,
     addSettingsEntry,
     handleSettingsSave,
+    handleSettingsIconChange,
   } = useQuickAccessSettings({
     defaultTerminalsRef,
     applyProjectState,
     syncWorkspaceQuickAccess,
     pushToast,
+    activeProjectIcon,
   });
 
   useEffect(() => {
@@ -1515,12 +1539,13 @@ function App(): JSX.Element {
       recentProjects.map((project) => ({
         path: project.path,
         label: project.name && project.name !== project.path ? `${project.name} (${project.path})` : project.path,
+        icon: project.icon ?? null,
       })),
     [recentProjects],
   );
 
   const headerSubtitle = activeProjectPath
-    ? `Project: ${activeProjectName || activeProjectPath}`
+    ? `Project: ${activeProjectIcon ? `${activeProjectIcon} ` : ""}${activeProjectName || activeProjectPath}`
     : "Open a project to manage its worktrees";
 
   const composePanelProjectName = (composeProjectName ?? activeProjectName) || null;
@@ -1547,6 +1572,7 @@ function App(): JSX.Element {
     project: {
       activePath: activeProjectPath,
       activeName: activeProjectName,
+      activeIcon: activeProjectIcon,
       recentProjects,
     },
     workspaceRowActions,
@@ -1635,11 +1661,13 @@ function App(): JSX.Element {
 
       {settingsOpen ? (
         <SettingsOverlay
+          icon={settingsIcon}
           quickAccess={settingsDraft}
           saving={settingsSaving}
           error={settingsError}
           onRequestClose={closeSettingsOverlay}
           onSubmit={handleSettingsSave}
+          onIconChange={handleSettingsIconChange}
           onEntryAdd={addSettingsEntry}
           onEntryChange={updateSettingsEntry}
           onEntryRemove={removeSettingsEntry}

@@ -50,9 +50,9 @@ test("resetWorkspaces clears workspace data while keeping active project context
   const store = createStore();
   store.dispatch(setActiveProjectPath("/projects/foo"));
   store.dispatch(setActiveProjectName("Foo"));
-  store.dispatch(addRecentProject({ path: "/projects/foo", name: "Foo" }));
-  store.dispatch(addRecentProject({ path: "/projects/bar", name: "Bar" }));
-  store.dispatch(addRecentProject({ path: "/projects/foo", name: "Foo" }));
+  store.dispatch(addRecentProject({ path: "/projects/foo", name: "Foo", icon: null }));
+  store.dispatch(addRecentProject({ path: "/projects/bar", name: "Bar", icon: null }));
+  store.dispatch(addRecentProject({ path: "/projects/foo", name: "Foo", icon: null }));
 
   const first = buildWorkspace("/projects/foo/.wtm/workspaces/alpha");
   const second = buildWorkspace("/projects/foo/.wtm/workspaces/beta");

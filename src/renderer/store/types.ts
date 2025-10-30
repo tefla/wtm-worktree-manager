@@ -9,6 +9,7 @@ export interface Toast {
 export interface RecentProject {
   path: string;
   name: string;
+  icon: string | null;
 }
 
 export interface BranchCatalog {

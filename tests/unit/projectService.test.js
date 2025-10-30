@@ -6,6 +6,7 @@ const { ProjectService } = require("../../dist/main/services/projectService.js")
 const sampleState = {
   projectPath: "/projects/foo",
   projectName: "Foo",
+  projectIcon: "🚀",
   quickAccess: [],
   composeProjectName: null,
   composeServices: [],

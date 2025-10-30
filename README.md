@@ -72,16 +72,17 @@ you'll find:
 
 ```
 .wtm/
-├── config.json        # Project-level quick access + future settings
+├── config.json        # Project icon and quick access settings
 ├── workspaces/        # Git worktrees and standalone folders live here
 └── terminals.json     # Terminal session persistence for this project
 ```
 
-The `config.json` file currently configures the preset quick-access terminals
+The `config.json` file configures the optional project icon plus the preset quick-access terminals
 that appear for every workspace in that project:
 
 ```json
 {
+  "icon": "🚀",
   "quickAccess": [
     { "key": "npm-install", "label": "npm i", "quickCommand": "npm i" },
     {
@@ -93,9 +94,10 @@ that appear for every workspace in that project:
 }
 ```
 
-Update the list to match the commands you want in your project. Use an empty
-array if you prefer to rely entirely on ad-hoc terminals. WTM normalises keys
-for uniqueness automatically.
+Set the `icon` to any short string (emoji or text) to display it beside the project name and in the selector,
+or leave it empty to hide it. Update the quick access list to match the commands you want in your project.
+Use an empty array if you prefer to rely entirely on ad-hoc terminals. WTM normalises keys for uniqueness
+automatically.
 
 The `workspaces/` directory is where `git worktree` checkouts are created. You
 can safely add existing worktree folders here before opening the project and

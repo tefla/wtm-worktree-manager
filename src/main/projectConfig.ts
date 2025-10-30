@@ -22,6 +22,7 @@ function cloneQuickAccess(entries: QuickAccessEntry[]): QuickAccessEntry[] {
 
 export function defaultProjectConfig(): ProjectConfig {
   return {
+    icon: null,
     quickAccess: cloneQuickAccess(DEFAULT_QUICK_ACCESS),
   };
 }
@@ -40,6 +41,14 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function normaliseIcon(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 function normaliseQuickAccess(list: unknown): QuickAccessEntry[] {
@@ -86,9 +95,11 @@ export function normaliseProjectConfig(raw: unknown): ProjectConfig {
   }
 
   const source = raw as Record<string, unknown>;
+  const icon = normaliseIcon(source.icon);
   const quickAccess = normaliseQuickAccess(source.quickAccess);
 
   return {
+    icon,
     quickAccess,
   };
 }

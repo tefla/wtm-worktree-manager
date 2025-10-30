@@ -78,7 +78,7 @@ function withMockedLocalStorage(initial = {}) {
 
 test("loadRecentProjects normalises entries and ignores invalid items", () => {
   const entry = JSON.stringify([
-    { path: " /tmp/project ", name: " Project " },
+    { path: " /tmp/project ", name: " Project ", icon: " 🚀 " },
     { path: "", name: "ignored" },
     "invalid",
   ]);
@@ -88,32 +88,35 @@ test("loadRecentProjects normalises entries and ignores invalid items", () => {
   assert.equal(projects.length, 1);
   assert.equal(projects[0].path, "/tmp/project");
   assert.equal(projects[0].name, "Project");
+  assert.equal(projects[0].icon, "🚀");
 
   env.restore();
 });
 
-test("persistRecentProjects stores a trimmed list respecting max entries", () => {
+test("persistRecentProjects stores a trimmed list respecting max entries and icons", () => {
   const env = withMockedLocalStorage();
   const entries = Array.from({ length: 10 }, (_, index) => ({
     path: `/tmp/project-${index}`,
     name: `Project ${index}`,
+    icon: index % 2 === 0 ? "🚀" : null,
   }));
 
   persistRecentProjects(entries);
   const stored = JSON.parse(env.store[RECENT_PROJECTS_STORAGE_KEY]);
   assert.equal(stored.length, 8, "should persist at most eight entries");
-  assert.deepEqual(stored[0], entries[0]);
+  assert.deepEqual(stored[0], { path: "/tmp/project-0", name: "Project 0", icon: "🚀" });
   env.restore();
 });
 
 test("upsertRecentProject promotes most recent entry to top", () => {
   const list = [
-    { path: "/tmp/a", name: "A" },
-    { path: "/tmp/b", name: "B" },
+    { path: "/tmp/a", name: "A", icon: null },
+    { path: "/tmp/b", name: "B", icon: "🚒" },
   ];
-  const updated = upsertRecentProject(list, { path: "/tmp/b", name: "B updated" });
+  const updated = upsertRecentProject(list, { path: "/tmp/b", name: "B updated", icon: "🚓" });
   assert.equal(updated[0].path, "/tmp/b");
   assert.equal(updated[0].name, "B updated");
+  assert.equal(updated[0].icon, "🚓");
   assert.equal(updated.length, 2);
 });
 

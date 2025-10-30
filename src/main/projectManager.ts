@@ -201,6 +201,7 @@ export class ProjectManager {
     return {
       projectPath: context.projectPath,
       projectName: basename(context.projectPath) || context.projectPath,
+      projectIcon: context.config.icon ?? null,
       quickAccess: context.config.quickAccess,
       composeProjectName: composeSnapshot.projectName,
       composeServices: composeSnapshot.services,

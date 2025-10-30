@@ -5,6 +5,7 @@ import type { ToastKind } from "../store/types";
 import {
   setSettingsDraft,
   setSettingsError,
+  setSettingsIcon,
   setSettingsOpen,
   setSettingsSaving,
   selectSettingsState,
@@ -20,17 +21,19 @@ interface UseQuickAccessSettingsOptions {
   applyProjectState: (state: ProjectState, options?: { persistRecent?: boolean }) => void;
   syncWorkspaceQuickAccess: (entries: QuickAccessEntry[]) => void;
   pushToast: (message: string, kind?: ToastKind) => void;
+  activeProjectIcon: string | null;
 }
 
 export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
-  const { defaultTerminalsRef, applyProjectState, syncWorkspaceQuickAccess, pushToast } = options;
+  const { defaultTerminalsRef, applyProjectState, syncWorkspaceQuickAccess, pushToast, activeProjectIcon } = options;
   const dispatch = useAppDispatch();
-  const { open, draft, saving, error } = useAppSelector(selectSettingsState);
+  const { open, draft, saving, error, icon } = useAppSelector(selectSettingsState);
 
   const settingsOpen = open;
   const settingsDraft = draft;
   const settingsSaving = saving;
   const settingsError = error;
+  const settingsIcon = icon;
 
   const openSettingsOverlay = useCallback(() => {
     const baseDefinitions = defaultTerminalsRef.current.length
@@ -47,8 +50,9 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
       ),
     );
     dispatch(setSettingsError(null));
+    dispatch(setSettingsIcon(activeProjectIcon ?? ""));
     dispatch(setSettingsOpen(true));
-  }, [defaultTerminalsRef, dispatch]);
+  }, [activeProjectIcon, defaultTerminalsRef, dispatch]);
 
   const closeSettingsOverlay = useCallback(() => {
     if (settingsSaving) {
@@ -56,7 +60,8 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     }
     dispatch(setSettingsOpen(false));
     dispatch(setSettingsError(null));
-  }, [dispatch, settingsSaving]);
+    dispatch(setSettingsIcon(activeProjectIcon ?? ""));
+  }, [activeProjectIcon, dispatch, settingsSaving]);
 
   const updateSettingsEntry = useCallback(
     (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => {
@@ -156,7 +161,11 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
       });
     });
 
-    const config: ProjectConfig = { quickAccess };
+    const iconValue = settingsIcon.trim();
+    const config: ProjectConfig = {
+      icon: iconValue ? iconValue : null,
+      quickAccess,
+    };
     dispatch(setSettingsSaving(true));
     try {
       const state = await projectAPI.updateConfig({ config });
@@ -176,15 +185,24 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     dispatch,
     pushToast,
     settingsDraft,
+    settingsIcon,
     settingsSaving,
     syncWorkspaceQuickAccess,
   ]);
+
+  const handleSettingsIconChange = useCallback(
+    (value: string) => {
+      dispatch(setSettingsIcon(value));
+    },
+    [dispatch],
+  );
 
   return {
     settingsOpen,
     settingsDraft,
     settingsSaving,
     settingsError,
+    settingsIcon,
     openSettingsOverlay,
     closeSettingsOverlay,
     updateSettingsEntry,
@@ -192,5 +210,6 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     moveSettingsEntry,
     addSettingsEntry,
     handleSettingsSave,
+    handleSettingsIconChange,
   };
 }

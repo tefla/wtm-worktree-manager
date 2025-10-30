@@ -6,6 +6,7 @@ export interface SettingsState {
   draft: QuickAccessDraft[];
   saving: boolean;
   error: string | null;
+  icon: string;
 }
 
 const initialState: SettingsState = {
@@ -13,6 +14,7 @@ const initialState: SettingsState = {
   draft: [],
   saving: false,
   error: null,
+  icon: "",
 };
 
 const settingsSlice = createSlice({
@@ -31,10 +33,14 @@ const settingsSlice = createSlice({
     setSettingsError(state, action: PayloadAction<string | null>) {
       state.error = action.payload;
     },
+    setSettingsIcon(state, action: PayloadAction<string>) {
+      state.icon = action.payload;
+    },
   },
 });
 
-export const { setSettingsOpen, setSettingsDraft, setSettingsSaving, setSettingsError } = settingsSlice.actions;
+export const { setSettingsOpen, setSettingsDraft, setSettingsSaving, setSettingsError, setSettingsIcon } =
+  settingsSlice.actions;
 
 export const settingsReducer = settingsSlice.reducer;
 

@@ -4,7 +4,7 @@ import { CreateWorkspaceForm, CreateWorkspaceFormProps } from "./CreateWorkspace
 interface AppHeaderProps {
   title: string;
   subtitle: string;
-  recentProjects: Array<{ path: string; label: string }>;
+  recentProjects: Array<{ path: string; label: string; icon: string | null }>;
   activeProjectPath: string | null;
   refreshing: boolean;
   onSelectProject: (path: string) => void;
@@ -58,11 +58,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   Select a project
                 </option>
               )}
-              {recentProjects.map((project) => (
-                <option key={project.path} value={project.path}>
-                  {project.label}
-                </option>
-              ))}
+              {recentProjects.map((project) => {
+                const optionLabel = project.icon ? `${project.icon} ${project.label}` : project.label;
+                return (
+                  <option key={project.path} value={project.path} data-icon={project.icon ?? undefined}>
+                    {optionLabel}
+                  </option>
+                );
+              })}
             </select>
           </label>
           <label className="header-toggle" htmlFor="project-open-new-window">
