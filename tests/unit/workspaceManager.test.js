@@ -148,3 +148,172 @@ test("WorkspaceManager.createWorkspace defaults base ref to current repo branch"
   await fs.rm(workspaceRoot, { recursive: true, force: true });
   await fs.rm(repoDir, { recursive: true, force: true });
 });
+
+test("WorkspaceManager.createWorkspace returns existing worktree when branch already registered", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const existingEntry = {
+    path: path.join(workspaceRoot, "feature"),
+    branch: "feature",
+    headSha: "abc123",
+  };
+
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+  manager.getWorktreeEntries = async () => [existingEntry];
+  manager.buildWorkspace = async (entry) => ({
+    id: entry.branch ?? entry.path,
+    branch: entry.branch,
+    path: path.resolve(entry.path),
+    relativePath: entry.branch ?? entry.path,
+    headSha: entry.headSha ?? "unknown",
+    status: {
+      clean: true,
+      ahead: 0,
+      behind: 0,
+      changeCount: 0,
+      summary: "No changes",
+      sampleChanges: [],
+    },
+    kind: "worktree",
+  });
+
+  const workspace = await manager.createWorkspace({ branch: "feature" });
+  assert.equal(workspace.path, path.resolve(existingEntry.path));
+  assert.equal(workspace.branch, "feature");
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+  await fs.rm(repoDir, { recursive: true, force: true });
+});
+
+test("WorkspaceManager.deleteWorkspace reports missing entries and dirty workspaces", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+
+  manager.getWorktreeEntries = async () => [];
+  let result = await manager.deleteWorkspace({ path: path.join(workspaceRoot, "missing") });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "not-found");
+
+  const dirtyPath = path.join(workspaceRoot, "dirty");
+  manager.getWorktreeEntries = async () => [{ path: dirtyPath, branch: "dirty", headSha: "abc123" }];
+  const gitCalls = [];
+  manager.git = async (args, options) => {
+    gitCalls.push({ args, options });
+    if (args[0] === "status") {
+      return { stdout: " M file.js\n", stderr: "", exitCode: 0 };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  result = await manager.deleteWorkspace({ path: dirtyPath });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "dirty");
+  assert.equal(gitCalls.length, 1);
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+  await fs.rm(repoDir, { recursive: true, force: true });
+});
+
+test("WorkspaceManager.deleteWorkspace removes clean worktree with optional force", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+  const targetPath = path.join(workspaceRoot, "feature-clean");
+
+  manager.getWorktreeEntries = async () => [{ path: targetPath, branch: "feature-clean", headSha: "abc123" }];
+  const executed = [];
+  manager.git = async (args) => {
+    executed.push(args);
+    if (args[0] === "status") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "worktree" && args[1] === "remove") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+
+  const result = await manager.deleteWorkspace({ path: targetPath, force: true });
+  assert.equal(result.success, true);
+  const removal = executed.find((call) => call[0] === "worktree" && call[1] === "remove");
+  assert.ok(removal, "should invoke git worktree remove");
+  assert.ok(removal.includes("--force"), "should include --force when requested");
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+  await fs.rm(repoDir, { recursive: true, force: true });
+});
+
+test("WorkspaceManager.updateWorkspace validates upstream, cleanliness, and fast-forwards", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workspaces-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "repo-"));
+  const targetPath = path.join(workspaceRoot, "feature");
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot });
+  manager.getWorktreeEntries = async () => [{ path: targetPath, branch: "feature", headSha: "abc123" }];
+
+  const buildCalls = [];
+  manager.buildWorkspace = async (entry) => {
+    buildCalls.push(entry);
+    return {
+      id: entry.branch ?? entry.path,
+      branch: entry.branch,
+      path: entry.path,
+      relativePath: entry.branch ?? entry.path,
+      headSha: entry.headSha ?? "unknown",
+      status: {
+        clean: true,
+        ahead: 0,
+        behind: 0,
+        changeCount: 0,
+        summary: "No changes",
+        sampleChanges: [],
+      },
+      kind: "worktree",
+    };
+  };
+
+  const gitScripts = [];
+  manager.git = async (args, options) => {
+    gitScripts.push({ args, options });
+    const command = args.join(" ");
+    if (command.includes("status --porcelain --branch")) {
+      return { stdout: gitScripts.statusOutput ?? "## feature\n", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "fetch" && args[1] === "--all") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (args[0] === "pull") {
+      if (!gitScripts.allowPull) {
+        throw new Error("pull should only occur when behind");
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    throw new Error(`Unexpected git invocation: ${command}`);
+  };
+
+  await assert.rejects(() => manager.updateWorkspace(targetPath), /upstream/);
+
+  gitScripts.length = 0;
+  gitScripts.statusOutput = "## feature...origin/feature\n M file.js\n";
+  await assert.rejects(() => manager.updateWorkspace(targetPath), /uncommitted changes/);
+
+  gitScripts.length = 0;
+  gitScripts.statusOutput = "## feature...origin/feature [ahead 1]\n";
+  const upToDate = await manager.updateWorkspace(targetPath);
+  assert.equal(upToDate.branch, "feature");
+  assert.equal(gitScripts.filter((call) => call.args[0] === "fetch").length, 0);
+
+  gitScripts.length = 0;
+  gitScripts.statusOutput = "## feature...origin/feature [behind 2]\n";
+  gitScripts.allowPull = true;
+  const updated = await manager.updateWorkspace(targetPath);
+  assert.equal(updated.branch, "feature");
+  assert.ok(
+    gitScripts.some((call) => call.args[0] === "fetch" && call.args[1] === "--all"),
+    "should fetch before pulling",
+  );
+  assert.ok(gitScripts.some((call) => call.args[0] === "pull"), "should pull when behind"),
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+  await fs.rm(repoDir, { recursive: true, force: true });
+});

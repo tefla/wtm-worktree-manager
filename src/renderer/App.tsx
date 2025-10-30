@@ -24,11 +24,9 @@ import type {
   TerminalExitPayload,
   WorkspaceStateResponse,
   WorkspaceSummary,
-  ProjectConfig,
 } from "./types";
 import { buildWorkspaceBranchName } from "../shared/jira";
 import type { JiraTicketSummary } from "../shared/jira";
-import type { DockerComposeServiceInfo } from "../shared/dockerCompose";
 import type { ToastKind } from "./store/appSlice";
 import {
   addRecentProject,
@@ -50,15 +48,14 @@ import {
   setLoadingWorkspaces,
   setOpenProjectsInNewWindow,
   setRefreshing,
-  setSettingsDraft,
-  setSettingsError,
-  setSettingsOpen,
-  setSettingsSaving,
   setUpdatingWorkspaces,
   setWorkspaces,
   setWorkspaceOrder,
 } from "./store/appSlice";
 import { useAppDispatch, useAppSelector } from "./store/hooks";
+import { normaliseComposeServices, normaliseQuickAccessList } from "./services/normalisers";
+import { jiraAPI, projectAPI, terminalAPI, workspaceAPI, wtmEnv } from "./services/ipc";
+import { useQuickAccessSettings } from "./hooks/useQuickAccessSettings";
 
 interface SessionIndexEntry {
   workspacePath: string;
@@ -81,96 +78,6 @@ const TERMINAL_THEME = {
   selectionBackground: "#1e293b",
 };
 const MAX_BRANCH_SUGGESTIONS = 8;
-
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function normaliseQuickAccessList(list: unknown, options: { fallbackToDefault?: boolean } = {}): TerminalDefinition[] {
-  const { fallbackToDefault = false } = options;
-  const source = Array.isArray(list) ? (list as QuickAccessEntry[]) : [];
-  const normalized: TerminalDefinition[] = [];
-  const seenKeys = new Set<string>();
-
-  source.forEach((entry, index) => {
-    const label = typeof entry?.label === "string" ? entry.label.trim() : "";
-    const command = typeof entry?.quickCommand === "string" ? entry.quickCommand.trim() : "";
-    if (!label && !command) {
-      return;
-    }
-    const baseKey = entry?.key && typeof entry.key === "string" ? entry.key.trim() : slugify(label || command);
-    let key = baseKey || `slot-${index + 1}`;
-    let counter = 1;
-    while (seenKeys.has(key)) {
-      key = `${baseKey || `slot-${index + 1}`}-${(counter += 1)}`;
-    }
-    seenKeys.add(key);
-    normalized.push({
-      key,
-      label: label || command || `Command ${index + 1}`,
-      quickCommand: command || null,
-      isEphemeral: false,
-    });
-  });
-
-  if (normalized.length === 0 && fallbackToDefault) {
-    return [
-      { key: "npm-install", label: "npm i", quickCommand: "npm i", isEphemeral: false },
-      {
-        key: "lerna-bootstrap",
-        label: "npm run lerna:bootstrap",
-        quickCommand: "npm run lerna:bootstrap",
-        isEphemeral: false,
-      },
-    ];
-  }
-
-  return normalized;
-}
-
-function normaliseComposeServices(list: unknown): DockerComposeServiceInfo[] {
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  const normalized: DockerComposeServiceInfo[] = [];
-  list.forEach((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return;
-    }
-    const candidate = entry as Partial<DockerComposeServiceInfo>;
-    if (typeof candidate.serviceName !== "string") {
-      return;
-    }
-    const service: DockerComposeServiceInfo = {
-      serviceName: candidate.serviceName,
-      containerName:
-        typeof candidate.containerName === "string" && candidate.containerName.trim()
-          ? candidate.containerName
-          : null,
-      projectName:
-        typeof candidate.projectName === "string" && candidate.projectName.trim()
-          ? candidate.projectName
-          : "",
-      state: typeof candidate.state === "string" && candidate.state.trim() ? candidate.state : "unknown",
-      status:
-        typeof candidate.status === "string" && candidate.status.trim()
-          ? candidate.status
-          : typeof candidate.state === "string" && candidate.state.trim()
-            ? candidate.state
-            : "unknown",
-      ...(typeof candidate.id === "string" && candidate.id.trim() ? { id: candidate.id } : {}),
-      ...(typeof candidate.health === "string" && candidate.health.trim()
-        ? { health: candidate.health }
-        : {}),
-    };
-    normalized.push(service);
-  });
-  return normalized;
-}
 
 function runtimeKey(workspacePath: string, terminalKey: string): string {
   return `${workspacePath}::${terminalKey}`;
@@ -210,10 +117,6 @@ function App(): JSX.Element {
     workspaceOrder,
     activeWorkspacePath,
     updatingWorkspaces,
-    settingsOpen,
-    settingsDraft,
-    settingsSaving,
-    settingsError,
     toastList,
   } = useAppSelector(selectAppState);
   const autoBaseRefRef = useRef<string | null>(null);
@@ -254,93 +157,6 @@ function App(): JSX.Element {
     dispatch(setOpenProjectsInNewWindow(value));
   }, [dispatch]);
 
-  const openSettingsOverlay = useCallback(() => {
-    const baseDefinitions = defaultTerminalsRef.current.length
-      ? defaultTerminalsRef.current
-      : normaliseQuickAccessList([], { fallbackToDefault: true });
-    dispatch(
-      setSettingsDraft(
-        baseDefinitions.map((definition) => ({
-          id: definition.key,
-          initialKey: definition.key,
-          label: definition.label,
-          quickCommand: definition.quickCommand ?? "",
-        })),
-      ),
-    );
-    dispatch(setSettingsError(null));
-    dispatch(setSettingsOpen(true));
-  }, [dispatch]);
-
-  const closeSettingsOverlay = useCallback(() => {
-    if (settingsSaving) {
-      return;
-    }
-    dispatch(setSettingsOpen(false));
-    dispatch(setSettingsError(null));
-  }, [dispatch, settingsSaving]);
-
-  const updateSettingsEntry = useCallback(
-    (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => {
-      dispatch(
-        setSettingsDraft(
-          settingsDraft.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
-        ),
-      );
-    },
-    [dispatch, settingsDraft],
-  );
-
-  const removeSettingsEntry = useCallback((id: string) => {
-    dispatch(setSettingsDraft(settingsDraft.filter((entry) => entry.id !== id)));
-  }, [dispatch, settingsDraft]);
-
-  const moveSettingsEntry = useCallback((id: string, direction: "up" | "down") => {
-    const index = settingsDraft.findIndex((entry) => entry.id === id);
-    if (index === -1) {
-      return;
-    }
-    const targetIndex = direction === "up" ? Math.max(0, index - 1) : Math.min(settingsDraft.length - 1, index + 1);
-    if (targetIndex === index) {
-      return;
-    }
-    const next = [...settingsDraft];
-    const [item] = next.splice(index, 1);
-    next.splice(targetIndex, 0, item);
-    dispatch(setSettingsDraft(next));
-  }, [dispatch, settingsDraft]);
-
-  const addSettingsEntry = useCallback(() => {
-    const id = `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    dispatch(
-      setSettingsDraft([
-        ...settingsDraft,
-        {
-          id,
-          initialKey: null,
-          label: "",
-          quickCommand: "",
-        },
-      ]),
-    );
-  }, [dispatch, settingsDraft]);
-
-  useEffect(() => {
-    if (!settingsOpen) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeSettingsOverlay();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [settingsOpen, closeSettingsOverlay]);
-
   const refreshComposeServices = useCallback(async () => {
     if (!activeProjectPath) {
       dispatch(setComposeServices([]));
@@ -351,7 +167,7 @@ function App(): JSX.Element {
     }
     dispatch(setComposeLoading(true));
     try {
-      const snapshot = await window.projectAPI.listComposeServices();
+      const snapshot = await projectAPI.listComposeServices();
       dispatch(setComposeServices(normaliseComposeServices(snapshot?.services)));
       const projectLabel =
         typeof snapshot?.projectName === "string" && snapshot.projectName.trim()
@@ -390,7 +206,7 @@ function App(): JSX.Element {
     dispatch(setLoadingWorkspaces(true));
     let list: WorkspaceSummary[] = [];
     try {
-      list = await window.workspaceAPI.list();
+      list = await workspaceAPI.list();
       workspacesRef.current = list;
       dispatch(setWorkspaces(list));
       list.forEach((workspace) => reopenWorkspaceTab(workspace));
@@ -419,12 +235,12 @@ function App(): JSX.Element {
   }, [activeProjectPath, activeWorkspacePath, dispatch, pushToast, reopenWorkspaceTab]);
 
   const loadBranches = useCallback(async () => {
-    if (!activeProjectPath || !window.workspaceAPI?.listBranches) {
+    if (!activeProjectPath) {
       dispatch(setBranchCatalog({ local: [], remote: [] }));
       return;
     }
     try {
-      const response = await window.workspaceAPI.listBranches();
+      const response = await workspaceAPI.listBranches();
       const payload =
         response && typeof response === "object"
           ? (response as { local?: unknown; remote?: unknown })
@@ -449,12 +265,8 @@ function App(): JSX.Element {
 
   const loadJiraTickets = useCallback(
     async (options: { forceRefresh?: boolean } = {}) => {
-      if (!window.jiraAPI?.listTickets) {
-        dispatch(setJiraTickets([]));
-        return;
-      }
       try {
-        const response = await window.jiraAPI.listTickets(options);
+        const response = await jiraAPI.listTickets(options);
         if (!Array.isArray(response)) {
           dispatch(setJiraTickets([]));
           return;
@@ -514,7 +326,7 @@ function App(): JSX.Element {
         return;
       }
       try {
-        const state = await window.projectAPI.openPath({ path: trimmed, openInNewWindow });
+        const state = await projectAPI.openPath({ path: trimmed, openInNewWindow });
         if (openInNewWindow) {
           if (state) {
             dispatch(addRecentProject({ path: state.projectPath, name: state.projectName }));
@@ -542,7 +354,7 @@ function App(): JSX.Element {
   const openProjectWithDialog = useCallback(async (options: { openInNewWindow?: boolean } = {}) => {
     const { openInNewWindow = false } = options;
     try {
-      const state = await window.projectAPI.openDialog({ openInNewWindow });
+      const state = await projectAPI.openDialog({ openInNewWindow });
       if (openInNewWindow) {
         if (state) {
           dispatch(addRecentProject({ path: state.projectPath, name: state.projectName }));
@@ -658,11 +470,11 @@ function App(): JSX.Element {
       if (record.sessionId) {
         sessionIndexRef.current.delete(record.sessionId);
         if (preserveSession) {
-          void window.terminalAPI
+          void terminalAPI
             .release(record.sessionId)
             .catch((error) => console.warn("Failed to release terminal session", error));
         } else {
-          void window.terminalAPI
+          void terminalAPI
             .dispose(record.sessionId, { preserve: preserveSession })
             .catch((error) => console.warn("Failed to dispose terminal", error));
         }
@@ -695,7 +507,7 @@ function App(): JSX.Element {
     (workspaceState: WorkspaceTabState, terminalKey: string | null) => {
       workspaceState.activeTerminalKey = terminalKey;
       forceRender();
-      void window.terminalAPI
+      void terminalAPI
         .setActiveTerminal(workspaceState.workspace.path, terminalKey)
         .catch((error) => console.warn("Failed to persist active terminal", error));
     },
@@ -792,73 +604,40 @@ function App(): JSX.Element {
     [disposeTerminalRuntime, setActiveTerminal, setupTerminalRecord, forceRender],
   );
 
-  const handleSettingsSave = useCallback(async () => {
-    if (settingsSaving) {
+  const {
+    settingsOpen,
+    settingsDraft,
+    settingsSaving,
+    settingsError,
+    openSettingsOverlay,
+    closeSettingsOverlay,
+    updateSettingsEntry,
+    removeSettingsEntry,
+    moveSettingsEntry,
+    addSettingsEntry,
+    handleSettingsSave,
+  } = useQuickAccessSettings({
+    defaultTerminalsRef,
+    applyProjectState,
+    syncWorkspaceQuickAccess,
+    pushToast,
+  });
+
+  useEffect(() => {
+    if (!settingsOpen) {
       return;
     }
-    if (!window.projectAPI?.updateConfig) {
-      dispatch(setSettingsError("Settings are not available in this build."));
-      return;
-    }
-    dispatch(setSettingsError(null));
-
-    const trimmed = settingsDraft.map((entry) => ({
-      ...entry,
-      label: entry.label.trim(),
-      quickCommand: entry.quickCommand.trim(),
-    }));
-
-    if (trimmed.length === 0) {
-      dispatch(setSettingsError("Add at least one quick access command before saving."));
-      return;
-    }
-
-    const missingCommand = trimmed.some((entry) => !entry.quickCommand);
-    if (missingCommand) {
-      dispatch(setSettingsError("Each quick access entry needs a command."));
-      return;
-    }
-
-    const usedKeys = new Set<string>();
-    const quickAccess: QuickAccessEntry[] = [];
-
-    trimmed.forEach((entry, index) => {
-      const fallbackLabel = entry.label || entry.quickCommand;
-      const slugBase = slugify(fallbackLabel);
-      const preferredBase =
-        entry.initialKey && entry.initialKey.trim() ? entry.initialKey.trim() : slugBase || `slot-${index + 1}`;
-      let candidate = preferredBase || `slot-${index + 1}`;
-      let counter = 2;
-      while (usedKeys.has(candidate)) {
-        const suffixBase =
-          entry.initialKey && entry.initialKey.trim() ? entry.initialKey.trim() : slugBase || preferredBase || `slot-${index + 1}`;
-        candidate = `${suffixBase}-${counter}`;
-        counter += 1;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSettingsOverlay();
       }
-      usedKeys.add(candidate);
-      quickAccess.push({
-        key: candidate,
-        label: fallbackLabel,
-        quickCommand: entry.quickCommand,
-      });
-    });
-
-    const config: ProjectConfig = { quickAccess };
-    dispatch(setSettingsSaving(true));
-    try {
-      const state = await window.projectAPI.updateConfig({ config });
-      applyProjectState(state, { persistRecent: false });
-      syncWorkspaceQuickAccess(state.quickAccess);
-      dispatch(setSettingsError(null));
-      dispatch(setSettingsOpen(false));
-      pushToast("Settings updated", "success");
-    } catch (error) {
-      console.error("Failed to update project settings", error);
-      dispatch(setSettingsError("Failed to save settings. Please try again."));
-    } finally {
-      dispatch(setSettingsSaving(false));
-    }
-  }, [dispatch, settingsSaving, settingsDraft, applyProjectState, syncWorkspaceQuickAccess, pushToast]);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [settingsOpen, closeSettingsOverlay]);
 
   const startTerminalSession = useCallback(
     async (workspaceState: WorkspaceTabState, record: TerminalRecord, container: HTMLDivElement) => {
@@ -886,7 +665,7 @@ function App(): JSX.Element {
 
       let sessionInfo: EnsureTerminalResponse;
       try {
-        sessionInfo = await window.terminalAPI.ensureSession({
+        sessionInfo = await terminalAPI.ensureSession({
           workspacePath: workspaceState.workspace.path,
           slot: record.key,
           cols: terminal.cols,
@@ -916,14 +695,14 @@ function App(): JSX.Element {
 
       terminal.onData((data) => {
         if (record.sessionId) {
-          window.terminalAPI.write(record.sessionId, data);
+          terminalAPI.write(record.sessionId, data);
         }
       });
 
       const resizeObserver = new ResizeObserver(() => {
         fitAddon.fit();
         if (record.sessionId && !record.closed) {
-          void window.terminalAPI
+          void terminalAPI
             .resize(record.sessionId, terminal.cols, terminal.rows)
             .catch((error) => console.warn("Failed to resize terminal", error));
         }
@@ -932,7 +711,7 @@ function App(): JSX.Element {
 
       runtimeRef.current.set(key, { terminal, fitAddon, resizeObserver, container });
 
-      void window.terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows).catch((error) => {
+      void terminalAPI.resize(sessionInfo.sessionId, terminal.cols, terminal.rows).catch((error) => {
         console.warn("Failed to perform initial resize", error);
       });
 
@@ -955,9 +734,9 @@ function App(): JSX.Element {
       if (record.quickCommand && !record.quickCommandExecuted) {
         setTimeout(() => {
           if (!record.sessionId) return;
-          window.terminalAPI.write(record.sessionId, `${record.quickCommand}\n`);
+          terminalAPI.write(record.sessionId, `${record.quickCommand}\n`);
           record.quickCommandExecuted = true;
-          void window.terminalAPI
+          void terminalAPI
             .markQuickCommand(workspaceState.workspace.path, record.key)
             .catch((error) => console.warn("Failed to mark quick command as executed", error));
           forceRender();
@@ -1039,7 +818,7 @@ function App(): JSX.Element {
 
       let savedStateRaw: WorkspaceStateResponse | null = null;
       try {
-        savedStateRaw = await window.terminalAPI.getWorkspaceState(workspace.path);
+        savedStateRaw = await terminalAPI.getWorkspaceState(workspace.path);
       } catch (error) {
         console.warn("Failed to fetch saved workspace terminals", error);
       }
@@ -1133,7 +912,7 @@ function App(): JSX.Element {
       });
 
       if (!preserveState) {
-        void window.terminalAPI
+        void terminalAPI
           .clearWorkspaceState(workspacePath)
           .catch((error) => console.warn("Failed to clear workspace terminal state", error));
       }
@@ -1175,7 +954,7 @@ function App(): JSX.Element {
     async (workspaceList: WorkspaceSummary[]) => {
       let savedWorkspacePaths: string[] = [];
       try {
-        const raw = await window.terminalAPI.listSavedWorkspaces();
+        const raw = await terminalAPI.listSavedWorkspaces();
         if (Array.isArray(raw)) {
           savedWorkspacePaths = raw.filter((entry): entry is string => typeof entry === "string");
         }
@@ -1242,7 +1021,7 @@ function App(): JSX.Element {
       }
       dispatch(setCreateInFlight(true));
       try {
-        const workspace = await window.workspaceAPI.create({
+        const workspace = await workspaceAPI.create({
           branch,
           baseRef: baseRef || undefined,
         });
@@ -1292,7 +1071,7 @@ function App(): JSX.Element {
   const handleRefreshWorkspace = useCallback(
     async (workspace: WorkspaceSummary) => {
       try {
-        const refreshed = await window.workspaceAPI.refresh({ path: workspace.path });
+        const refreshed = await workspaceAPI.refresh({ path: workspace.path });
         const current = workspacesRef.current;
         const next = current.map((item) => (item.path === refreshed.path ? refreshed : item));
         workspacesRef.current = next;
@@ -1317,7 +1096,7 @@ function App(): JSX.Element {
       updatingWorkspacesRef.current = queued;
       dispatch(setUpdatingWorkspaces(queued));
       try {
-        const updated = await window.workspaceAPI.update({ path: workspace.path });
+        const updated = await workspaceAPI.update({ path: workspace.path });
         const current = workspacesRef.current;
         const next = current.map((item) => (item.path === updated.path ? updated : item));
         workspacesRef.current = next;
@@ -1351,7 +1130,7 @@ function App(): JSX.Element {
         return;
       }
       try {
-        const result = await window.workspaceAPI.delete({ path: workspace.path });
+        const result = await workspaceAPI.delete({ path: workspace.path });
         if (!result.success) {
           pushToast(result.message ?? "Failed to delete workspace", "error");
           return;
@@ -1375,12 +1154,12 @@ function App(): JSX.Element {
     const stored = recentProjects;
     void (async () => {
       try {
-        const current = await window.projectAPI.getCurrent();
+        const current = await projectAPI.getCurrent();
         if (current) {
           applyProjectState(current, { persistRecent: true });
           return;
         }
-        const automationProjectPath = window.wtmEnv?.e2eProjectPath ?? undefined;
+        const automationProjectPath = wtmEnv.getE2EProjectPath() ?? undefined;
         if (automationProjectPath) {
           await openProjectByPath(automationProjectPath, { silent: true });
           return;
@@ -1439,7 +1218,7 @@ function App(): JSX.Element {
   }, [activeProjectPath, dispatch, loadBranches, loadJiraTickets]);
 
   useEffect(() => {
-    const disposeData = window.terminalAPI.onData((payload: TerminalDataPayload) => {
+    const disposeData = terminalAPI.onData((payload: TerminalDataPayload) => {
       const meta = sessionIndexRef.current.get(payload.sessionId);
       if (!meta) return;
       const workspaceState = workspaceTabsRef.current.get(meta.workspacePath);
@@ -1459,7 +1238,7 @@ function App(): JSX.Element {
       }
     });
 
-    const disposeExit = window.terminalAPI.onExit((payload: TerminalExitPayload) => {
+    const disposeExit = terminalAPI.onExit((payload: TerminalExitPayload) => {
       const meta = sessionIndexRef.current.get(payload.sessionId);
       if (!meta) return;
       const workspaceState = workspaceTabsRef.current.get(meta.workspacePath);
@@ -1503,7 +1282,7 @@ function App(): JSX.Element {
       if (!runtime) return;
       runtime.fitAddon.fit();
       if (record.sessionId) {
-        void window.terminalAPI
+        void terminalAPI
           .resize(record.sessionId, runtime.terminal.cols, runtime.terminal.rows)
           .catch((error) => console.warn("Failed to resize terminal", error));
       }

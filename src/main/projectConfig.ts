@@ -1,14 +1,7 @@
 import { promises as fs } from "node:fs";
+import type { ProjectConfig, QuickAccessEntry } from "../shared/ipc";
 
-export interface QuickAccessEntry {
-  key: string;
-  label: string;
-  quickCommand: string;
-}
-
-export interface ProjectConfig {
-  quickAccess: QuickAccessEntry[];
-}
+export type { ProjectConfig, QuickAccessEntry } from "../shared/ipc";
 
 const DEFAULT_QUICK_ACCESS: QuickAccessEntry[] = [
   {

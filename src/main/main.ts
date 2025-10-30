@@ -9,6 +9,8 @@ import { TerminalHostClient } from "./terminalHostClient";
 import { jiraTicketCache } from "./jiraTicketCache";
 import { DockerComposeInspector } from "./dockerComposeInspector";
 import type { ProjectConfig } from "./projectConfig";
+import { registerWorkspaceHandlers } from "./ipc/workspaceHandlers";
+import { registerTerminalHandlers } from "./ipc/terminalHandlers";
 
 const isMac = process.platform === "darwin";
 
@@ -87,127 +89,6 @@ async function createWindow(): Promise<BrowserWindow> {
   }
 
   return window;
-}
-
-function exposeWorkspaceHandlers() {
-  ipcMain.handle("workspace:list", async (event) => {
-    const context = getContext(event);
-    return context.workspaceManager.listWorkspaces();
-  });
-
-  ipcMain.handle("workspace:listBranches", async (event) => {
-    const context = getContext(event);
-    return context.workspaceManager.listBranches();
-  });
-
-  ipcMain.handle("workspace:create", async (event, params) => {
-    const context = getContext(event);
-    try {
-      return await context.workspaceManager.createWorkspace(params || {});
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      dialog.showErrorBox("Create Workspace Failed", message);
-      throw error;
-    }
-  });
-
-  ipcMain.handle("workspace:delete", async (event, params) => {
-    const context = getContext(event);
-    return context.workspaceManager.deleteWorkspace(params || {});
-  });
-
-  ipcMain.handle("workspace:refresh", async (event, params) => {
-    const context = getContext(event);
-    const targetPath = params?.path;
-    if (!targetPath) {
-      throw new Error("Path is required to refresh workspace");
-    }
-    return context.workspaceManager.refreshWorkspace(targetPath);
-  });
-
-  ipcMain.handle("workspace:update", async (event, params) => {
-    const context = getContext(event);
-    const targetPath = params?.path;
-    if (!targetPath) {
-      throw new Error("Path is required to update workspace");
-    }
-    try {
-      return await context.workspaceManager.updateWorkspace(targetPath);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      dialog.showErrorBox("Update Workspace Failed", message);
-      throw error;
-    }
-  });
-}
-
-function exposeTerminalHandlers() {
-  ipcMain.handle("terminal:ensure", (event, params) => {
-    const context = getContext(event);
-    return context.terminalManager.ensureSession(params || {}, event.sender.id);
-  });
-
-  ipcMain.on("terminal:write", (event, params) => {
-    if (!params?.sessionId || typeof params.data !== "string") return;
-    const context = findContext(event);
-    if (!context) return;
-    void context.terminalManager.write(params.sessionId, params.data);
-  });
-
-  ipcMain.handle("terminal:resize", (event, params) => {
-    if (!params?.sessionId || typeof params.cols !== "number" || typeof params.rows !== "number") {
-      return;
-    }
-    const context = getContext(event);
-    return context.terminalManager.resize(params.sessionId, params.cols, params.rows);
-  });
-
-  ipcMain.handle("terminal:dispose", (event, params) => {
-    if (!params?.sessionId) return;
-    const context = getContext(event);
-    return context.terminalManager.dispose(params.sessionId, params.options || {});
-  });
-
-  ipcMain.handle("terminal:release", (event, params) => {
-    if (!params?.sessionId) return;
-    const context = getContext(event);
-    return context.terminalManager.release(params.sessionId, event.sender.id);
-  });
-
-  ipcMain.handle("terminal:listForWorkspace", (event, params) => {
-    if (!params?.workspacePath) return [];
-    const context = getContext(event);
-    return context.terminalManager.listSessionsForWorkspace(params.workspacePath);
-  });
-
-  ipcMain.handle("terminal:getWorkspaceState", (event, params) => {
-    if (!params?.workspacePath) return { activeTerminal: null, terminals: {} };
-    const context = getContext(event);
-    return context.terminalManager.getWorkspaceState(params.workspacePath);
-  });
-
-  ipcMain.handle("terminal:listSavedWorkspaces", (event) => {
-    const context = getContext(event);
-    return context.terminalManager.listSavedWorkspaces();
-  });
-
-  ipcMain.handle("terminal:markQuickCommand", (event, params) => {
-    if (!params?.workspacePath || !params?.slot) return;
-    const context = getContext(event);
-    return context.terminalManager.markQuickCommandExecuted(params.workspacePath, params.slot);
-  });
-
-  ipcMain.handle("terminal:setActiveTerminal", (event, params) => {
-    if (!params?.workspacePath) return;
-    const context = getContext(event);
-    return context.terminalManager.setActiveTerminal(params.workspacePath, params.slot ?? null);
-  });
-
-  ipcMain.handle("terminal:clearWorkspaceState", (event, params) => {
-    if (!params?.workspacePath) return;
-    const context = getContext(event);
-    return context.terminalManager.clearWorkspaceState(params.workspacePath);
-  });
 }
 
 function exposeProjectHandlers() {
@@ -338,8 +219,16 @@ function exposeJiraHandlers() {
 }
 
 app.whenReady().then(async () => {
-  exposeWorkspaceHandlers();
-  exposeTerminalHandlers();
+  registerWorkspaceHandlers({
+    ipcMain,
+    dialog,
+    getContext,
+  });
+  registerTerminalHandlers({
+    ipcMain,
+    getContext,
+    findContext,
+  });
   exposeProjectHandlers();
   exposeJiraHandlers();
   await createWindow();

@@ -3,6 +3,14 @@ import { constants, promises as fsPromises } from "node:fs";
 import type { Dirent } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import type {
+  WorkspaceCommitSummary,
+  WorkspaceStatusSummary,
+  WorkspaceSummary,
+  WorkspaceDeleteRequest,
+  WorkspaceDeleteResponse,
+  WorkspaceCreateRequest,
+} from "../shared/ipc";
 
 const { access } = fsPromises;
 
@@ -10,35 +18,6 @@ export interface GitCommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
-}
-
-export interface WorkspaceStatusSummary {
-  clean: boolean;
-  ahead: number;
-  behind: number;
-  upstream?: string;
-  changeCount: number;
-  summary: string;
-  sampleChanges: string[];
-}
-
-export interface WorkspaceCommitSummary {
-  shortSha: string;
-  author: string;
-  relativeTime: string;
-  subject: string;
-}
-
-export interface WorkspaceSummary {
-  id: string;
-  branch?: string;
-  path: string;
-  relativePath: string;
-  headSha: string;
-  status: WorkspaceStatusSummary;
-  lastCommit?: WorkspaceCommitSummary;
-  updatedAt?: number;
-  kind: "worktree" | "folder";
 }
 
 export class GitCommandError extends Error {
@@ -463,7 +442,7 @@ export class WorkspaceManager {
     return { remote: "origin", ref: baseRef };
   }
 
-  async createWorkspace(params: { branch: string; baseRef?: string }): Promise<WorkspaceSummary> {
+  async createWorkspace(params: WorkspaceCreateRequest): Promise<WorkspaceSummary> {
     this.ensureConfigured();
     const branchName = params.branch.trim();
     if (!branchName) {
@@ -510,7 +489,7 @@ export class WorkspaceManager {
     return this.buildWorkspace({ path: worktreePath, branch: branchName });
   }
 
-  async deleteWorkspace(params: { path: string; force?: boolean }): Promise<{ success: boolean; reason?: string; message?: string; path?: string }> {
+  async deleteWorkspace(params: WorkspaceDeleteRequest): Promise<WorkspaceDeleteResponse> {
     this.ensureConfigured();
     const targetPath = resolve(params.path);
     const entries = await this.getWorktreeEntries();

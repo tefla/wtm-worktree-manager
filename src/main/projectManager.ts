@@ -4,16 +4,16 @@ import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import {
   loadProjectConfig,
-  ProjectConfig,
-  QuickAccessEntry,
   saveProjectConfig,
   defaultProjectConfig,
   normaliseProjectConfig,
 } from "./projectConfig";
+import type { ProjectConfig, QuickAccessEntry } from "./projectConfig";
 import { WorkspaceManager } from "./workspaceManager";
 import { TerminalSessionStore } from "./terminalSessionStore";
 import { DockerComposeInspector } from "./dockerComposeInspector";
 import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
+import type { ProjectState } from "../shared/ipc";
 
 const WTM_FOLDER_NAME = ".wtm";
 const CONFIG_FILE_NAME = "config.json";
@@ -27,15 +27,6 @@ export interface ProjectContext {
   workspacesPath: string;
   terminalsPath: string;
   config: ProjectConfig;
-}
-
-export interface ProjectState {
-  projectPath: string;
-  projectName: string;
-  quickAccess: QuickAccessEntry[];
-  composeProjectName: string | null;
-  composeServices: DockerComposeServicesSnapshot["services"];
-  composeError?: string | null;
 }
 
 export class MissingProjectStructureError extends Error {
