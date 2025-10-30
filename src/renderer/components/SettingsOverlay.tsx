@@ -1,12 +1,6 @@
 import React, { FormEvent } from "react";
 import { cx } from "../utils/cx";
-
-export interface QuickAccessDraft {
-  id: string;
-  initialKey: string | null;
-  label: string;
-  quickCommand: string;
-}
+import type { QuickAccessDraft } from "../stateTypes";
 
 interface SettingsOverlayProps {
   quickAccess: QuickAccessDraft[];

@@ -44,3 +44,10 @@ export interface WorkspaceTabState {
   savedState: SavedWorkspaceState;
   ephemeralCounter: number;
 }
+
+export interface QuickAccessDraft {
+  id: string;
+  initialKey: string | null;
+  label: string;
+  quickCommand: string;
+}

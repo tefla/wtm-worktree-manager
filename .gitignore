@@ -3,6 +3,7 @@ build/
 dist/
 release/
 test-results/
+tmp/
 nohup.out
 .idea/
 
