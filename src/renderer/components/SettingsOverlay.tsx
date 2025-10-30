@@ -67,7 +67,9 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
               autoComplete="off"
               disabled={saving}
             />
-            <span className="settings-field-note">Shown next to the project name and in the project picker.</span>
+            <span className="settings-field-note">
+              Shown next to the project name and in the picker; point to an image file to update the window icon.
+            </span>
           </label>
         </div>
         <div className="settings-section">
