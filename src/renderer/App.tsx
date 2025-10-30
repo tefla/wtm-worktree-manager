@@ -135,6 +135,7 @@ function App(): JSX.Element {
   const runtimeRef = useRef<Map<string, TerminalRuntime>>(new Map());
   const previousProjectPathRef = useRef<string | null>(null);
   const toastIdRef = useRef(0);
+  const activeWorkspacePathRef = useRef(activeWorkspacePath);
   const [renderTicker, forceRender] = useReducer((value) => value + 1, 0);
   const workspacesRef = useRef(workspaces);
   const workspaceOrderRef = useRef(workspaceOrder);
@@ -148,6 +149,10 @@ function App(): JSX.Element {
   useEffect(() => {
     workspaceOrderRef.current = workspaceOrder;
   }, [workspaceOrder]);
+
+  useEffect(() => {
+    activeWorkspacePathRef.current = activeWorkspacePath;
+  }, [activeWorkspacePath]);
 
   useEffect(() => {
     updatingWorkspacesRef.current = updatingWorkspaces;
@@ -219,13 +224,15 @@ function App(): JSX.Element {
       workspacesRef.current = list;
       dispatch(setWorkspaces(list));
       list.forEach((workspace) => reopenWorkspaceTab(workspace));
+      const previousActivePath = activeWorkspacePathRef.current;
       const nextActive =
         list.length === 0
           ? null
-          : activeWorkspacePath && list.some((item) => item.path === activeWorkspacePath)
-            ? activeWorkspacePath
+          : previousActivePath && list.some((item) => item.path === previousActivePath)
+            ? previousActivePath
             : list[0].path;
       dispatch(setActiveWorkspacePath(nextActive));
+      activeWorkspacePathRef.current = nextActive;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("No project configured")) {
@@ -241,7 +248,7 @@ function App(): JSX.Element {
       dispatch(setLoadingWorkspaces(false));
     }
     return list;
-  }, [activeProjectPath, activeWorkspacePath, dispatch, pushToast, reopenWorkspaceTab]);
+  }, [activeProjectPath, dispatch, pushToast, reopenWorkspaceTab]);
 
   const loadBranches = useCallback(async () => {
     if (!activeProjectPath) {

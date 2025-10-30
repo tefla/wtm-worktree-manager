@@ -23,6 +23,54 @@ test("parseWorktreeList extracts entries under workspace root", () => {
   });
 });
 
+test("WorkspaceManager.listWorkspaces resolves symlinked workspace roots", async () => {
+  const actualRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wtm-actual-"));
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "wtm-repo-"));
+  const symlinkRoot = path.join(os.tmpdir(), `wtm-link-${Date.now()}`);
+  const worktreeDir = path.join(actualRoot, "feature-symlink");
+  await fs.mkdir(worktreeDir, { recursive: true });
+  await fs.symlink(actualRoot, symlinkRoot, process.platform === "win32" ? "junction" : "dir");
+
+  const manager = new WorkspaceManager({ repoDir, workspaceRoot: symlinkRoot });
+  manager.git = async (args) => {
+    if (args[0] === "worktree" && args[1] === "list" && args[2] === "--porcelain") {
+      const stdout = `worktree ${worktreeDir}\nHEAD abc123\nbranch refs/heads/feature/symlink\n`;
+      return { stdout, stderr: "", exitCode: 0 };
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+  manager.buildWorkspace = async (entry) => ({
+    id: entry.branch ?? entry.path,
+    branch: entry.branch,
+    path: entry.path,
+    relativePath: path.basename(entry.path),
+    headSha: entry.headSha ?? "abc123",
+    status: {
+      clean: true,
+      ahead: 0,
+      behind: 0,
+      upstream: undefined,
+      changeCount: 0,
+      summary: "Clean working tree",
+      sampleChanges: [],
+    },
+    kind: "worktree",
+  });
+
+  try {
+    const expectedPath = await fs.realpath(worktreeDir);
+    const workspaces = await manager.listWorkspaces();
+    assert.equal(workspaces.length, 1);
+    assert.equal(workspaces[0].kind, "worktree");
+    assert.equal(workspaces[0].path, expectedPath);
+    assert.equal(workspaces[0].relativePath, "feature-symlink");
+  } finally {
+    await fs.rm(symlinkRoot, { recursive: true, force: true });
+    await fs.rm(actualRoot, { recursive: true, force: true });
+    await fs.rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test("parseStatus reports ahead/behind counts", () => {
   const output = "## feature/branch...origin/feature/branch [ahead 2, behind 1]\n M src/app.js\n";
   const report = parseStatus(output, "feature/branch");

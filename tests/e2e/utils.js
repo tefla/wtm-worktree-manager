@@ -47,6 +47,7 @@ async function setupProjectWorkspace() {
 
   const worktreePath = path.join(workspacesPath, "feature-test");
   await runGit(["worktree", "add", worktreePath, "feature/test"], { cwd: projectPath });
+  const worktreeRealPath = await fs.realpath(worktreePath);
 
   const orphanFolder = path.join(workspacesPath, "orphan-folder");
   await fs.mkdir(orphanFolder, { recursive: true });
@@ -67,7 +68,8 @@ async function setupProjectWorkspace() {
   return {
     projectPath,
     wtmPath,
-    worktreePath,
+    worktreePath: worktreeRealPath,
+    worktreeSymlinkPath: worktreePath,
     orphanFolder,
     terminalsPath,
     socketPath,

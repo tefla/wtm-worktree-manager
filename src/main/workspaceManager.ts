@@ -1,6 +1,6 @@
-import { mkdir, stat, readdir } from "node:fs/promises";
+import { mkdir, stat, readdir, realpath } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   WorkspaceCommitSummary,
   WorkspaceStatusSummary,
@@ -17,11 +17,20 @@ export interface WorktreeEntry {
   branch?: string;
 }
 
-export function parseWorktreeList(output: string, workspaceRoot: string): WorktreeEntry[] {
+function isSubPath(parent: string, child: string): boolean {
+  const resolvedParent = resolve(parent);
+  const resolvedChild = resolve(child);
+  if (resolvedParent === resolvedChild) {
+    return true;
+  }
+  const diff = relative(resolvedParent, resolvedChild);
+  return diff !== "" && !diff.startsWith("..") && !isAbsolute(diff);
+}
+
+export function parseWorktreeList(output: string, _workspaceRoot: string): WorktreeEntry[] {
   const lines = output.split(/\r?\n/);
   const entries: WorktreeEntry[] = [];
   let current: WorktreeEntry | null = null;
-  const normalizedRoot = resolve(workspaceRoot);
 
   for (const rawLine of lines) {
     if (!rawLine) continue;
@@ -49,7 +58,7 @@ export function parseWorktreeList(output: string, workspaceRoot: string): Worktr
 
   if (current) entries.push(current);
 
-  return entries.filter((entry) => resolve(entry.path).startsWith(normalizedRoot));
+  return entries;
 }
 
 export interface StatusReport {
@@ -141,10 +150,12 @@ export interface WorkspaceManagerOptions {
 export class WorkspaceManager {
   repoDir: string;
   workspaceRoot: string;
+  private workspaceRootReal: string | null;
 
   constructor(options: WorkspaceManagerOptions = {}) {
     this.repoDir = "";
     this.workspaceRoot = "";
+    this.workspaceRootReal = null;
     this.configure(options);
   }
 
@@ -157,8 +168,10 @@ export class WorkspaceManager {
 
     if (options.workspaceRoot) {
       this.workspaceRoot = resolve(options.workspaceRoot);
+      this.workspaceRootReal = null;
     } else if (!options.repoDir) {
       this.workspaceRoot = "";
+      this.workspaceRootReal = null;
     }
   }
 
@@ -168,9 +181,30 @@ export class WorkspaceManager {
     }
   }
 
+  private async updateWorkspaceRootRealPath(): Promise<void> {
+    if (!this.workspaceRoot) {
+      this.workspaceRootReal = null;
+      return;
+    }
+    try {
+      this.workspaceRootReal = await realpath(this.workspaceRoot);
+    } catch {
+      this.workspaceRootReal = this.workspaceRoot;
+    }
+  }
+
+  private async resolveRealPath(target: string): Promise<string> {
+    try {
+      return await realpath(target);
+    } catch {
+      return resolve(target);
+    }
+  }
+
   async ensureWorkspaceRoot(): Promise<void> {
     this.ensureConfigured();
     await mkdir(this.workspaceRoot, { recursive: true });
+    await this.updateWorkspaceRootRealPath();
   }
 
   async git(args: string[], options: { cwd?: string; allowFailure?: boolean } = {}): Promise<GitCommandResult> {
@@ -185,8 +219,21 @@ export class WorkspaceManager {
   async getWorktreeEntries(): Promise<WorktreeEntry[]> {
     this.ensureConfigured();
     await this.ensureWorkspaceRoot();
+    const comparisonRoot = this.workspaceRootReal ?? this.workspaceRoot;
     const result = await this.git(["worktree", "list", "--porcelain"]);
-    return parseWorktreeList(result.stdout, this.workspaceRoot);
+    const parsed = parseWorktreeList(result.stdout, comparisonRoot);
+    const filtered: WorktreeEntry[] = [];
+    for (const entry of parsed) {
+      const entryRealPath = await this.resolveRealPath(entry.path);
+      if (!isSubPath(comparisonRoot, entryRealPath)) {
+        continue;
+      }
+      filtered.push({
+        ...entry,
+        path: entryRealPath,
+      });
+    }
+    return filtered;
   }
 
   async buildWorkspace(entry: WorktreeEntry): Promise<WorkspaceSummary> {
@@ -200,7 +247,8 @@ export class WorkspaceManager {
     const commit = await getLastCommit(entry.path, this.git.bind(this));
     const pathStats = await stat(entry.path).catch(() => undefined);
 
-    const relativePath = relative(this.workspaceRoot, entry.path) || entry.path;
+    const rootForRelative = this.workspaceRootReal ?? this.workspaceRoot;
+    const relativePath = relative(rootForRelative, entry.path) || entry.path;
     const headSha = entry.headSha ?? commit?.shortSha ?? "";
 
     return {
@@ -219,13 +267,14 @@ export class WorkspaceManager {
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
     this.ensureConfigured();
     const entries = await this.getWorktreeEntries();
+    const comparisonRoot = this.workspaceRootReal ?? this.workspaceRoot;
     const worktreeMap = new Map<string, true>();
     const workspaces: WorkspaceSummary[] = [];
 
     for (const entry of entries) {
       const workspace = await this.buildWorkspace(entry);
       workspaces.push(workspace);
-      worktreeMap.set(resolve(entry.path), true);
+      worktreeMap.set(entry.path, true);
     }
 
     const folderEntries = await readdir(this.workspaceRoot, { withFileTypes: true })
@@ -236,7 +285,8 @@ export class WorkspaceManager {
         continue;
       }
       const folderPath = resolve(join(this.workspaceRoot, dirent.name));
-      if (worktreeMap.has(folderPath)) {
+      const folderRealPath = await this.resolveRealPath(folderPath);
+      if (worktreeMap.has(folderRealPath)) {
         continue;
       }
 
@@ -245,7 +295,7 @@ export class WorkspaceManager {
         id: dirent.name,
         branch: dirent.name,
         path: folderPath,
-        relativePath: dirent.name,
+        relativePath: relative(comparisonRoot, folderRealPath) || dirent.name,
         headSha: "",
         status: {
           clean: false,
