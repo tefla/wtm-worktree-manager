@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage } from "electron";
+import { readFileSync } from "node:fs";
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 import { WorkspaceManager } from "./workspaceManager";
@@ -18,7 +19,22 @@ import { ProjectService } from "./services/projectService";
 
 const isMac = process.platform === "darwin";
 const iconPath = path.join(__dirname, "../assets/app-icon.svg");
-const appIcon = nativeImage.createFromPath(iconPath);
+function loadAppIcon(): Electron.NativeImage | undefined {
+  try {
+    const svgContent = readFileSync(iconPath, "utf8");
+    const base64 = Buffer.from(svgContent).toString("base64");
+    const dataUrl = `data:image/svg+xml;base64,${base64}`;
+    const image = nativeImage.createFromDataURL(dataUrl);
+    if (!image.isEmpty()) {
+      return image;
+    }
+  } catch (error) {
+    console.warn("Failed to load SVG app icon, falling back to default Electron icon.", error);
+  }
+  const fallback = nativeImage.createFromPath(iconPath);
+  return fallback.isEmpty() ? undefined : fallback;
+}
+const appIcon = loadAppIcon();
 
 interface WindowContext {
   workspaceManager: WorkspaceManager;
@@ -79,7 +95,7 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 640,
     backgroundColor: "#0f172a",
     title: "WTM (WorkTree Manager)",
-    icon: appIcon.isEmpty() ? undefined : appIcon,
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -155,7 +171,7 @@ app.whenReady().then(async () => {
   });
   exposeJiraHandlers();
   await createWindow();
-  if (isMac && !appIcon.isEmpty()) {
+  if (isMac && appIcon) {
     app.dock.setIcon(appIcon);
   }
 
