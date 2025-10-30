@@ -1,5 +1,5 @@
 import type { Dialog, IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
-import type { WorkspaceManager } from "../workspaceManager";
+import type { WorkspaceService } from "../services/workspaceService";
 import type {
   WorkspaceCreateRequest,
   WorkspaceDeleteRequest,
@@ -10,7 +10,7 @@ import type {
 } from "../../shared/ipc";
 
 interface WorkspaceHandlerContext {
-  workspaceManager: WorkspaceManager;
+  workspaceService: WorkspaceService;
 }
 
 interface RegisterWorkspaceHandlersOptions {
@@ -24,18 +24,18 @@ export function registerWorkspaceHandlers(options: RegisterWorkspaceHandlersOpti
 
   ipcMain.handle("workspace:list", async (event): Promise<WorkspaceSummary[]> => {
     const context = getContext(event);
-    return context.workspaceManager.listWorkspaces();
+    return context.workspaceService.listWorkspaces();
   });
 
   ipcMain.handle("workspace:listBranches", async (event): Promise<WorkspaceListBranchesResponse> => {
     const context = getContext(event);
-    return context.workspaceManager.listBranches();
+    return context.workspaceService.listBranches();
   });
 
   ipcMain.handle("workspace:create", async (event, params: WorkspaceCreateRequest) => {
     const context = getContext(event);
     try {
-      return await context.workspaceManager.createWorkspace(params ?? { branch: "" });
+      return await context.workspaceService.createWorkspace(params ?? { branch: "" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       dialog.showErrorBox("Create Workspace Failed", message);
@@ -45,7 +45,7 @@ export function registerWorkspaceHandlers(options: RegisterWorkspaceHandlersOpti
 
   ipcMain.handle("workspace:delete", async (event, params: WorkspaceDeleteRequest): Promise<WorkspaceDeleteResponse> => {
     const context = getContext(event);
-    return context.workspaceManager.deleteWorkspace(params ?? { path: "" });
+    return context.workspaceService.deleteWorkspace(params ?? { path: "" });
   });
 
   ipcMain.handle("workspace:refresh", async (event, params: WorkspacePathRequest) => {
@@ -54,7 +54,7 @@ export function registerWorkspaceHandlers(options: RegisterWorkspaceHandlersOpti
     if (!targetPath) {
       throw new Error("Path is required to refresh workspace");
     }
-    return context.workspaceManager.refreshWorkspace(targetPath);
+    return context.workspaceService.refreshWorkspace(targetPath);
   });
 
   ipcMain.handle("workspace:update", async (event, params: WorkspacePathRequest) => {
@@ -64,7 +64,7 @@ export function registerWorkspaceHandlers(options: RegisterWorkspaceHandlersOpti
       throw new Error("Path is required to update workspace");
     }
     try {
-      return await context.workspaceManager.updateWorkspace(targetPath);
+      return await context.workspaceService.updateWorkspace(targetPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       dialog.showErrorBox("Update Workspace Failed", message);

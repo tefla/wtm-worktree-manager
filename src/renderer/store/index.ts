@@ -1,9 +1,17 @@
 import { configureStore } from "@reduxjs/toolkit";
-import { appReducer } from "./appSlice";
+import { workspaceReducer } from "./slices/workspacesSlice";
+import { projectReducer } from "./slices/projectSlice";
+import { settingsReducer } from "./slices/settingsSlice";
+import { jiraReducer } from "./slices/jiraSlice";
+import { notificationsReducer } from "./slices/notificationsSlice";
 
 export const store = configureStore({
   reducer: {
-    app: appReducer,
+    workspaces: workspaceReducer,
+    project: projectReducer,
+    settings: settingsReducer,
+    jira: jiraReducer,
+    notifications: notificationsReducer,
   },
 });
 

@@ -2,21 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { configureStore } from "@reduxjs/toolkit";
 import {
-  appReducer,
-  addRecentProject,
-  resetState,
-  setActiveProjectName,
-  setActiveProjectPath,
+  workspaceReducer,
+  setWorkspaces,
+  setWorkspaceOrder,
   setActiveWorkspacePath,
   setUpdatingWorkspaces,
-  setWorkspaceOrder,
-  setWorkspaces,
-} from "../../tmp/renderer-tests/renderer/store/appSlice.js";
+  resetWorkspaces,
+} from "../../tmp/renderer-tests/renderer/store/slices/workspacesSlice.js";
+import {
+  projectReducer,
+  setActiveProjectPath,
+  setActiveProjectName,
+  addRecentProject,
+} from "../../tmp/renderer-tests/renderer/store/slices/projectSlice.js";
 
 const createStore = () =>
   configureStore({
     reducer: {
-      app: appReducer,
+      workspaces: workspaceReducer,
+      project: projectReducer,
     },
   });
 
@@ -42,7 +46,7 @@ const buildWorkspace = (path, overrides = {}) => ({
   kind: overrides.kind ?? "worktree",
 });
 
-test("resetState clears workspace data while keeping active project context", () => {
+test("resetWorkspaces clears workspace data while keeping active project context", () => {
   const store = createStore();
   store.dispatch(setActiveProjectPath("/projects/foo"));
   store.dispatch(setActiveProjectName("Foo"));
@@ -58,18 +62,18 @@ test("resetState clears workspace data while keeping active project context", ()
   store.dispatch(setActiveWorkspacePath(second.path));
   store.dispatch(setUpdatingWorkspaces({ [first.path]: true }));
 
-  store.dispatch(resetState());
+  store.dispatch(resetWorkspaces());
 
-  const state = store.getState().app;
-  assert.equal(state.activeProjectPath, "/projects/foo");
-  assert.equal(state.activeProjectName, "Foo");
-  assert.deepEqual(state.workspaces, []);
-  assert.deepEqual(state.workspaceOrder, []);
-  assert.equal(state.activeWorkspacePath, null);
-  assert.deepEqual(state.updatingWorkspaces, {});
-  assert.equal(state.loadingWorkspaces, true);
+  const { workspaces, project } = store.getState();
+  assert.equal(project.activeProjectPath, "/projects/foo");
+  assert.equal(project.activeProjectName, "Foo");
+  assert.deepEqual(workspaces.list, []);
+  assert.deepEqual(workspaces.order, []);
+  assert.equal(workspaces.activePath, null);
+  assert.deepEqual(workspaces.updating, {});
+  assert.equal(workspaces.loading, true);
   assert.deepEqual(
-    state.recentProjects.map((project) => project.path),
+    project.recentProjects.map((proj) => proj.path),
     ["/projects/foo", "/projects/bar"],
   );
 });
@@ -88,18 +92,18 @@ test("workspace order and active selection follow lifecycle transitions", () => 
   store.dispatch(setActiveWorkspacePath(beta.path));
   store.dispatch(setUpdatingWorkspaces({ [beta.path]: true }));
 
-  let state = store.getState().app;
-  assert.deepEqual(state.workspaceOrder, [alpha.path, beta.path]);
-  assert.equal(state.activeWorkspacePath, beta.path);
-  assert.deepEqual(state.updatingWorkspaces, { [beta.path]: true });
+  let state = store.getState().workspaces;
+  assert.deepEqual(state.order, [alpha.path, beta.path]);
+  assert.equal(state.activePath, beta.path);
+  assert.deepEqual(state.updating, { [beta.path]: true });
 
   store.dispatch(setWorkspaces([alpha]));
   store.dispatch(setWorkspaceOrder([alpha.path]));
   store.dispatch(setActiveWorkspacePath(alpha.path));
   store.dispatch(setUpdatingWorkspaces({}));
 
-  state = store.getState().app;
-  assert.deepEqual(state.workspaceOrder, [alpha.path]);
-  assert.equal(state.activeWorkspacePath, alpha.path);
-  assert.deepEqual(state.updatingWorkspaces, {});
+  state = store.getState().workspaces;
+  assert.deepEqual(state.order, [alpha.path]);
+  assert.equal(state.activePath, alpha.path);
+  assert.deepEqual(state.updating, {});
 });

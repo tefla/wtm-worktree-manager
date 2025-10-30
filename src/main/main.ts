@@ -11,15 +11,22 @@ import { DockerComposeInspector } from "./dockerComposeInspector";
 import type { ProjectConfig } from "./projectConfig";
 import { registerWorkspaceHandlers } from "./ipc/workspaceHandlers";
 import { registerTerminalHandlers } from "./ipc/terminalHandlers";
+import { registerProjectHandlers } from "./ipc/projectHandlers";
+import { WorkspaceService } from "./services/workspaceService";
+import { TerminalService } from "./services/terminalService";
+import { ProjectService } from "./services/projectService";
 
 const isMac = process.platform === "darwin";
 
 interface WindowContext {
   workspaceManager: WorkspaceManager;
+  workspaceService: WorkspaceService;
   terminalSessionStore: TerminalSessionStore;
   terminalHostClient: TerminalHostClient;
   terminalManager: TerminalManager;
+  terminalService: TerminalService;
   projectManager: ProjectManager;
+  projectService: ProjectService;
   dockerComposeInspector: DockerComposeInspector;
 }
 
@@ -27,17 +34,23 @@ const windowContexts = new Map<number, WindowContext>();
 
 function createWindowContext(target: BrowserWindow): WindowContext {
   const workspaceManager = new WorkspaceManager();
+  const workspaceService = new WorkspaceService(workspaceManager);
   const terminalSessionStore = new TerminalSessionStore();
   const terminalHostClient = new TerminalHostClient();
   const terminalManager = new TerminalManager(terminalSessionStore, terminalHostClient);
+  const terminalService = new TerminalService(terminalManager);
   const dockerComposeInspector = new DockerComposeInspector();
   const projectManager = new ProjectManager(workspaceManager, terminalSessionStore, dockerComposeInspector);
+  const projectService = new ProjectService(projectManager);
   const context: WindowContext = {
     workspaceManager,
+    workspaceService,
     terminalSessionStore,
     terminalHostClient,
     terminalManager,
+    terminalService,
     projectManager,
+    projectService,
     dockerComposeInspector,
   };
   windowContexts.set(target.webContents.id, context);
@@ -91,116 +104,6 @@ async function createWindow(): Promise<BrowserWindow> {
   return window;
 }
 
-function exposeProjectHandlers() {
-  ipcMain.handle("project:getCurrent", async (event) => {
-    const context = getContext(event);
-    return context.projectManager.getCurrentState();
-  });
-
-  ipcMain.handle("project:listComposeServices", async (event) => {
-    const context = getContext(event);
-    return context.projectManager.listComposeServices();
-  });
-
-  ipcMain.handle("project:updateConfig", async (event, params) => {
-    const context = getContext(event);
-    const config: unknown = params?.config ?? params;
-    if (!config || typeof config !== "object") {
-      throw new Error("Project configuration payload is required");
-    }
-    return context.projectManager.updateConfig(config as ProjectConfig);
-  });
-
-  ipcMain.handle("project:openPath", async (event, params) => {
-    const targetPath = typeof params?.path === "string" ? params.path : "";
-    const openInNewWindow = Boolean(params?.openInNewWindow);
-    if (!targetPath) {
-      throw new Error("Project path is required");
-    }
-
-    if (openInNewWindow) {
-      try {
-        const newWindow = await createWindow();
-        const newContext = windowContexts.get(newWindow.webContents.id);
-        if (!newContext) {
-          newWindow.close();
-          throw new Error("Failed to initialise window context");
-        }
-        try {
-          return await newContext.projectManager.setCurrentProjectWithPrompt(targetPath, newWindow);
-        } catch (error) {
-          newWindow.close();
-          throw error;
-        }
-      } catch (error) {
-        dialog.showErrorBox(
-          "Open Project Failed",
-          error instanceof Error ? error.message : String(error),
-        );
-        throw error;
-      }
-    }
-
-    const context = getContext(event);
-    const browserWindow = BrowserWindow.fromWebContents(event.sender);
-    try {
-      return await context.projectManager.setCurrentProjectWithPrompt(targetPath, browserWindow ?? undefined);
-    } catch (error) {
-      dialog.showErrorBox(
-        "Open Project Failed",
-        error instanceof Error ? error.message : String(error),
-      );
-      throw error;
-    }
-  });
-
-  ipcMain.handle("project:openDialog", async (event, params) => {
-    const openInNewWindow = Boolean(params?.openInNewWindow);
-    const browserWindow = BrowserWindow.fromWebContents(event.sender);
-    const selection = await dialog.showOpenDialog(browserWindow ?? undefined, {
-      properties: ["openDirectory"],
-    });
-    if (selection.canceled || selection.filePaths.length === 0) {
-      return null;
-    }
-    const targetPath = selection.filePaths[0];
-
-    if (openInNewWindow) {
-      try {
-        const newWindow = await createWindow();
-        const newContext = windowContexts.get(newWindow.webContents.id);
-        if (!newContext) {
-          newWindow.close();
-          throw new Error("Failed to initialise window context");
-        }
-        try {
-          return await newContext.projectManager.setCurrentProjectWithPrompt(targetPath, newWindow);
-        } catch (error) {
-          newWindow.close();
-          throw error;
-        }
-      } catch (error) {
-        dialog.showErrorBox(
-          "Open Project Failed",
-          error instanceof Error ? error.message : String(error),
-        );
-        throw error;
-      }
-    }
-
-    const context = getContext(event);
-    try {
-      return await context.projectManager.setCurrentProjectWithPrompt(targetPath, browserWindow ?? undefined);
-    } catch (error) {
-      dialog.showErrorBox(
-        "Open Project Failed",
-        error instanceof Error ? error.message : String(error),
-      );
-      throw error;
-    }
-  });
-}
-
 function exposeJiraHandlers() {
   ipcMain.handle("jira:listTickets", async (_event, params) => {
     const forceRefresh = Boolean(params?.forceRefresh);
@@ -222,14 +125,31 @@ app.whenReady().then(async () => {
   registerWorkspaceHandlers({
     ipcMain,
     dialog,
-    getContext,
+    getContext: (event) => {
+      const context = getContext(event);
+      return { workspaceService: context.workspaceService };
+    },
   });
   registerTerminalHandlers({
     ipcMain,
-    getContext,
-    findContext,
+    getContext: (event) => {
+      const context = getContext(event);
+      return { terminalService: context.terminalService };
+    },
+    findContext: (event) => {
+      const context = findContext(event);
+      return context ? { terminalService: context.terminalService } : undefined;
+    },
   });
-  exposeProjectHandlers();
+  registerProjectHandlers({
+    ipcMain,
+    dialog,
+    createWindow,
+    getContext: (event) => {
+      const context = getContext(event);
+      return { projectService: context.projectService };
+    },
+  });
   exposeJiraHandlers();
   await createWindow();
 

@@ -5,22 +5,21 @@ and pruning `git worktree` checkouts for any git repository. It provides a
 compact, IDE-inspired view over multiple worktrees alongside built-in terminal
 tabs for common project commands.
 
-## Features
+## Documentation
 
-- List every workspace with branch name, worktree path, head SHA, and last
-  commit metadata.
-- Inline git status indicator showing uncommitted change counts plus upstream
-  ahead/behind deltas and sample filenames.
-- Highlights any stray folders in the workspace directory that are not linked
-  as git worktrees so you can tidy them up.
-- Create new workspaces by reusing existing branches or branching from a chosen
-  base (defaults to the repo's current branch).
-- Per-project configuration stored alongside your repository in a `.wtm`
-  folder, so teams can keep presets in source control.
-- Rescan a workspace to refresh status without reloading the entire list.
-- Delete workspaces with dirty-tree warnings so uncommitted work is never lost
-  silently.
-- Branch name input provides Jira ticket suggestions from a cached issue list.
+- 📘 **User Guide** – `docs/USER_GUIDE.md`
+- 🛠️ **Developer Guide** – `docs/DEVELOPER_GUIDE.md`
+
+The guides cover everyday use, widget-based customisation, and the backend/frontend architecture for contributors.
+
+## Feature Highlights
+
+- Rich workspace list with git status, ahead/behind counters, and last-commit metadata.
+- Per-project `.wtm/` structure for quick-access commands and persisted terminals.
+- Built-in terminal tabs with session persistence and quick command support.
+- Modular widget/row-action registry so teams can extend the sidebar, main panel, and compose area.
+- Detached PTY host process keeps terminals alive between restarts.
+- Jira ticket suggestions in the branch input (when configured).
 
 ## Prerequisites
 
@@ -59,26 +58,12 @@ npm run test:e2e      # Playwright electron smoke tests
 
 ## Project Layout
 
-```
-src/
-├── main/
-│   ├── main.ts              # Electron entry point + IPC wiring
-│   ├── preload.ts           # Secure bridge exposing workspace & project APIs
-│   ├── projectConfig.ts     # Project config normalisation helpers
-│   ├── projectManager.ts    # Handles `.wtm` detection/creation per project
-│   ├── terminalHost.ts      # Detached PTY host process keeping sessions alive
-│   ├── terminalHostClient.ts  # Socket client used by the main process
-│   ├── terminalHostPaths.ts   # Helpers for locating the host socket/binaries
-│   ├── terminalHostProtocol.ts
-│   ├── terminalManager.ts   # Main-process terminal orchestration and IPC
-│   ├── terminalSessionStore.ts
-│   └── workspaceManager.ts  # Git + worktree orchestration
-└── renderer/
-    ├── index.html           # Renderer shell markup
-    ├── index.tsx            # Renderer entry
-    ├── App.tsx              # Main UI shell
-    └── styles.css           # UI styling
-```
+A bridged Electron architecture:
+
+- `src/main/` – Electron main process, IPC handlers, domain managers, and modular services (`services/`).
+- `src/renderer/` – React renderer (Redux slices, widget registry, components).
+- `src/shared/` – Shared IPC contracts and domain types.
+- `tests/` – Node-based unit tests (run via `node --test`).
 
 ## Project Configuration
 
@@ -119,45 +104,6 @@ they will be picked up on the next refresh.
 `terminals.json` stores the terminal history per workspace so that reopening a
 workspace restores its tabs. It is safe to delete when you want to start fresh.
 
-### Detached terminal sessions
-
-Terminal tabs now run inside a lightweight, detached Node.js host process. The
-host is spawned on demand the first time a terminal is opened, listens on
-`~/.wtm/terminal-host.sock` (or `\\?\pipe\wtm-terminal-host` on Windows), and
-keeps each PTY alive even after the main Electron window closes. When you
-relaunch WTM the renderer reattaches to the existing PTYs, pulls any buffered
-output that accumulated while the UI was closed, and resumes streaming in real
-time.
-
-The host automatically exits once there are no active sessions or connected
-clients for roughly one minute. If you ever need to forcefully clean up
-everything, simply close the app, wait for the idle timeout, and remove the
-project's `.wtm/terminals.json` file for a completely fresh slate.
-
-WTM persists the list of recently opened projects locally, making it quick to
-switch between repositories without re-browsing the filesystem.
-
-## Migration from the global settings file
-
-Earlier versions of WTM used a single `~/.wtm/settings.json` that listed
-“environments” with `repoDir` and `workspaceRoot` paths. On first launch after
-upgrading, the new UI will ask you to open a project folder. To migrate an old
-environment:
-
-1. Open the repository folder you previously referenced as `repoDir`.
-2. When prompted, allow WTM to create a default `.wtm` folder (or create it
-   manually and move your existing worktrees under `.wtm/workspaces`).
-3. Copy any custom quick-access entries from the old `quickAccess` array into
-   `.wtm/config.json`.
-4. Move or re-clone your worktrees into `.wtm/workspaces/` so the app can detect
-   them automatically.
-5. *(Optional)* If you want to keep terminal history, copy the relevant entries
-   from `~/.wtm/terminals.json` into the new `.wtm/terminals.json` file. The
-   format is unchanged, so you can either copy the entire file (if it only
-   contained this project) or merge the `workspaces` keys for the paths you
-   still use.
-
-The old `~/.wtm/settings.json` file is no longer read. You can safely remove it
 once you've migrated each environment into its project’s `.wtm` directory.
 
 ## Jira Ticket Cache

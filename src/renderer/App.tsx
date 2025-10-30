@@ -4,7 +4,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { AppHeader } from "./components/AppHeader";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
-import { ComposeServicesPanel } from "./components/ComposeServicesPanel";
 import { SettingsOverlay } from "./components/SettingsOverlay";
 import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
@@ -27,35 +26,41 @@ import type {
 } from "./types";
 import { buildWorkspaceBranchName } from "../shared/jira";
 import type { JiraTicketSummary } from "../shared/jira";
-import type { ToastKind } from "./store/appSlice";
+import type { ToastKind } from "./store/types";
 import {
-  addRecentProject,
-  addToast,
-  removeToast,
-  selectAppState,
-  setActiveProjectName,
-  setActiveProjectPath,
-  setActiveWorkspacePath,
-  setBaseInput,
-  setBranchCatalog,
-  setBranchInput,
-  setComposeError,
-  setComposeLoading,
-  setComposeProjectName,
-  setComposeServices,
-  setCreateInFlight,
-  setJiraTickets,
-  setLoadingWorkspaces,
-  setOpenProjectsInNewWindow,
-  setRefreshing,
-  setUpdatingWorkspaces,
   setWorkspaces,
   setWorkspaceOrder,
-} from "./store/appSlice";
+  setActiveWorkspacePath,
+  setUpdatingWorkspaces,
+  setLoadingWorkspaces,
+  setRefreshing,
+  setBranchInput,
+  setBaseInput,
+  setCreateInFlight,
+  setBranchCatalog,
+  resetWorkspaces,
+  selectWorkspaceState,
+} from "./store/slices/workspacesSlice";
+import {
+  setActiveProjectName,
+  setActiveProjectPath,
+  addRecentProject,
+  setComposeProjectName,
+  setComposeServices,
+  setComposeError,
+  setComposeLoading,
+  setOpenProjectsInNewWindow,
+  setComposeSnapshot,
+  selectProjectState,
+} from "./store/slices/projectSlice";
+import { setJiraTickets, selectJiraState } from "./store/slices/jiraSlice";
+import { addToast, removeToast, selectNotificationsState } from "./store/slices/notificationsSlice";
 import { useAppDispatch, useAppSelector } from "./store/hooks";
 import { normaliseComposeServices, normaliseQuickAccessList } from "./services/normalisers";
 import { jiraAPI, projectAPI, terminalAPI, workspaceAPI, wtmEnv } from "./services/ipc";
 import { useQuickAccessSettings } from "./hooks/useQuickAccessSettings";
+import { useWidgets, useWorkspaceRowActions } from "./widgets/registry";
+import type { WidgetRenderContext } from "./widgets/types";
 
 interface SessionIndexEntry {
   workspacePath: string;
@@ -98,14 +103,18 @@ function ensureSavedWorkspaceState(workspacePath: string, saved?: WorkspaceState
 function App(): JSX.Element {
   const dispatch = useAppDispatch();
   const {
-    workspaces,
-    loadingWorkspaces,
+    list: workspaces,
+    loading: loadingWorkspaces,
     refreshing,
     branchInput,
     baseInput,
     createInFlight,
-    jiraTickets,
     branchCatalog,
+    order: workspaceOrder,
+    activePath: activeWorkspacePath,
+    updating: updatingWorkspaces,
+  } = useAppSelector(selectWorkspaceState);
+  const {
     recentProjects,
     activeProjectPath,
     activeProjectName,
@@ -114,11 +123,9 @@ function App(): JSX.Element {
     composeError,
     composeLoading,
     openProjectsInNewWindow,
-    workspaceOrder,
-    activeWorkspacePath,
-    updatingWorkspaces,
-    toastList,
-  } = useAppSelector(selectAppState);
+  } = useAppSelector(selectProjectState);
+  const { tickets: jiraTickets } = useAppSelector(selectJiraState);
+  const { toasts: toastList } = useAppSelector(selectNotificationsState);
   const autoBaseRefRef = useRef<string | null>(null);
   const defaultTerminalsRef = useRef<TerminalDefinition[]>([]);
   const workspaceTabsRef = useRef<Map<string, WorkspaceTabState>>(new Map());
@@ -1518,6 +1525,75 @@ function App(): JSX.Element {
 
   const composePanelProjectName = (composeProjectName ?? activeProjectName) || null;
 
+  const workspaceRowActions = useWorkspaceRowActions();
+
+  const widgetContext = useMemo<WidgetRenderContext>(() => ({
+    workspace: {
+      list: workspaceList,
+      order: workspaceOrder,
+      activePath: activeWorkspacePath,
+      updating: updatingWorkspaces,
+      loading: loadingWorkspaces,
+      tabs: workspaceTabsRef.current,
+    },
+    compose: {
+      hasActiveProject: Boolean(activeProjectPath),
+      projectName: composePanelProjectName,
+      services: composeServices,
+      loading: composeLoading,
+      error: composeError,
+      refresh: refreshComposeServices,
+    },
+    project: {
+      activePath: activeProjectPath,
+      activeName: activeProjectName,
+      recentProjects,
+    },
+    workspaceRowActions,
+    callbacks: {
+      selectWorkspace: handleWorkspaceSelect,
+      refreshWorkspace: handleRefreshWorkspace,
+      deleteWorkspace: handleDeleteWorkspace,
+      updateWorkspace: handleUpdateWorkspace,
+      selectWorkspaceTab: handleWorkspaceTabSelect,
+      addTerminal: handleAddTerminal,
+      onTerminalTabClick: handleTerminalTabClick,
+      onTerminalClose: handleTerminalClose,
+      onTerminalStart: handleTerminalStart,
+      onTerminalDispose: handleTerminalDispose,
+    },
+  }), [
+    workspaceList,
+    workspaceOrder,
+    activeWorkspacePath,
+    updatingWorkspaces,
+    loadingWorkspaces,
+    activeProjectPath,
+    composePanelProjectName,
+    composeServices,
+    composeLoading,
+    composeError,
+    refreshComposeServices,
+    activeProjectName,
+    recentProjects,
+    workspaceRowActions,
+    handleWorkspaceSelect,
+    handleRefreshWorkspace,
+    handleDeleteWorkspace,
+    handleUpdateWorkspace,
+    handleWorkspaceTabSelect,
+    handleAddTerminal,
+    handleTerminalTabClick,
+    handleTerminalClose,
+    handleTerminalStart,
+    handleTerminalDispose,
+    renderTicker,
+  ]);
+
+  const sidebarWidgets = useWidgets("sidebar");
+  const mainWidgets = useWidgets("main");
+  const auxiliaryWidgets = useWidgets("aux");
+
   return (
     <div className="app-shell">
       <AppHeader
@@ -1546,37 +1622,15 @@ function App(): JSX.Element {
       />
 
       <main className="content-shell">
-        <WorkspaceSidebar
-          loading={loadingWorkspaces}
-          workspaces={workspaceList}
-          activeWorkspacePath={activeWorkspacePath}
-          onSelect={handleWorkspaceSelect}
-          onRefreshWorkspace={handleRefreshWorkspace}
-          onDeleteWorkspace={handleDeleteWorkspace}
-          onUpdateWorkspace={handleUpdateWorkspace}
-          updatingPaths={updatingWorkspaces}
-        />
-        <WorkspaceTabsPanel
-          workspaceOrder={workspaceOrder}
-          workspaceTabs={workspaceTabsRef.current}
-          activeWorkspacePath={activeWorkspacePath}
-          onSelectWorkspace={handleWorkspaceTabSelect}
-          onRefreshWorkspace={handleRefreshWorkspace}
-          onDeleteWorkspace={handleDeleteWorkspace}
-          onAddTerminal={handleAddTerminal}
-          onTerminalTabClick={handleTerminalTabClick}
-          onTerminalClose={handleTerminalClose}
-          onTerminalStart={handleTerminalStart}
-          onTerminalDispose={handleTerminalDispose}
-        />
-        <ComposeServicesPanel
-          hasActiveProject={Boolean(activeProjectPath)}
-          projectName={composePanelProjectName}
-          services={composeServices}
-          loading={composeLoading}
-          error={composeError}
-          onRefresh={refreshComposeServices}
-        />
+        {sidebarWidgets.map((widget) => (
+          <React.Fragment key={widget.id}>{widget.render(widgetContext)}</React.Fragment>
+        ))}
+        {mainWidgets.map((widget) => (
+          <React.Fragment key={widget.id}>{widget.render(widgetContext)}</React.Fragment>
+        ))}
+        {auxiliaryWidgets.map((widget) => (
+          <React.Fragment key={widget.id}>{widget.render(widgetContext)}</React.Fragment>
+        ))}
       </main>
 
       {settingsOpen ? (

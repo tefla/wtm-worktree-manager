@@ -2,6 +2,7 @@ import React from "react";
 import type { WorkspaceSummary } from "../types";
 import { cx } from "../utils/cx";
 import { buildStatusIcons, buildStatusTooltip } from "../utils/workspacePresentation";
+import type { WorkspaceRowActionDefinition } from "../widgets/types";
 
 interface WorkspaceSidebarProps {
   loading: boolean;
@@ -12,6 +13,7 @@ interface WorkspaceSidebarProps {
   onDeleteWorkspace: (workspace: WorkspaceSummary) => void;
   onUpdateWorkspace: (workspace: WorkspaceSummary) => void;
   updatingPaths: Record<string, boolean>;
+  rowActions?: WorkspaceRowActionDefinition[];
 }
 
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
@@ -23,6 +25,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   onDeleteWorkspace,
   onUpdateWorkspace,
   updatingPaths,
+  rowActions = [],
 }) => {
   return (
     <aside className="workspace-sidebar">
@@ -42,6 +45,19 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
             const branchLabel = workspace.branch || workspace.relativePath || "Detached HEAD";
             const tooltip = buildStatusTooltip(workspace.status);
             const isUpdating = Boolean(updatingPaths[workspace.path]);
+            const extraActions = rowActions.map((action) => (
+              <React.Fragment key={action.id}>
+                {action.render({
+                  workspace,
+                  isUpdating,
+                  onRefresh: () => onRefreshWorkspace(workspace),
+                  onDelete: () => onDeleteWorkspace(workspace),
+                  onUpdate: () => onUpdateWorkspace(workspace),
+                })}
+              </React.Fragment>
+            ));
+            const showDefaultActions = workspace.kind === "worktree";
+            const showActionBar = showDefaultActions || extraActions.length > 0;
             return (
               <div
                 key={workspace.path}
@@ -86,34 +102,39 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                     );
                   })}
                 </div>
-                {workspace.kind === "worktree" && (
+                {showActionBar ? (
                   <div className="workspace-row-actions">
-                    <button
-                      className="row-icon-button"
-                      type="button"
-                      aria-label="Rescan workspace"
-                      title="Rescan workspace"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRefreshWorkspace(workspace);
-                      }}
-                    >
-                      ⟳
-                    </button>
-                    <button
-                      className="row-icon-button danger"
-                      type="button"
-                      aria-label="Delete workspace"
-                      title="Delete workspace"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteWorkspace(workspace);
-                      }}
-                    >
-                      ✖
-                    </button>
+                    {showDefaultActions ? (
+                      <>
+                        <button
+                          className="row-icon-button"
+                          type="button"
+                          aria-label="Rescan workspace"
+                          title="Rescan workspace"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRefreshWorkspace(workspace);
+                          }}
+                        >
+                          ⟳
+                        </button>
+                        <button
+                          className="row-icon-button danger"
+                          type="button"
+                          aria-label="Delete workspace"
+                          title="Delete workspace"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteWorkspace(workspace);
+                          }}
+                        >
+                          ✖
+                        </button>
+                      </>
+                    ) : null}
+                    {extraActions}
                   </div>
-                )}
+                ) : null}
               </div>
             );
           })

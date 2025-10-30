@@ -1,19 +1,19 @@
 import { useCallback } from "react";
 import type { MutableRefObject } from "react";
 import type { ProjectState, QuickAccessEntry } from "../../shared/ipc";
-import type { ToastKind } from "../store/appSlice";
+import type { ToastKind } from "../store/types";
 import {
   setSettingsDraft,
   setSettingsError,
   setSettingsOpen,
   setSettingsSaving,
-} from "../store/appSlice";
+  selectSettingsState,
+} from "../store/slices/settingsSlice";
 import type { TerminalDefinition, QuickAccessDraft } from "../stateTypes";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { projectAPI } from "../services/ipc";
 import { normaliseQuickAccessList, slugify } from "../services/normalisers";
 import type { ProjectConfig } from "../types";
-import type { RootState } from "../store";
 
 interface UseQuickAccessSettingsOptions {
   defaultTerminalsRef: MutableRefObject<TerminalDefinition[]>;
@@ -22,25 +22,15 @@ interface UseQuickAccessSettingsOptions {
   pushToast: (message: string, kind?: ToastKind) => void;
 }
 
-const selectSettingsState = (state: RootState) => {
-  const {
-    settingsOpen,
-    settingsDraft,
-    settingsSaving,
-    settingsError,
-  } = state.app;
-  return {
-    settingsOpen,
-    settingsDraft,
-    settingsSaving,
-    settingsError,
-  };
-};
-
 export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
   const { defaultTerminalsRef, applyProjectState, syncWorkspaceQuickAccess, pushToast } = options;
   const dispatch = useAppDispatch();
-  const { settingsOpen, settingsDraft, settingsSaving, settingsError } = useAppSelector(selectSettingsState);
+  const { open, draft, saving, error } = useAppSelector(selectSettingsState);
+
+  const settingsOpen = open;
+  const settingsDraft = draft;
+  const settingsSaving = saving;
+  const settingsError = error;
 
   const openSettingsOverlay = useCallback(() => {
     const baseDefinitions = defaultTerminalsRef.current.length

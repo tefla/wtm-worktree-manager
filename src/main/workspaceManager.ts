@@ -1,8 +1,6 @@
-import { mkdir, stat } from "node:fs/promises";
-import { constants, promises as fsPromises } from "node:fs";
+import { mkdir, stat, readdir } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { spawn } from "node:child_process";
 import type {
   WorkspaceCommitSummary,
   WorkspaceStatusSummary,
@@ -11,82 +9,7 @@ import type {
   WorkspaceDeleteResponse,
   WorkspaceCreateRequest,
 } from "../shared/ipc";
-
-const { access } = fsPromises;
-
-export interface GitCommandResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-export class GitCommandError extends Error {
-  command: string[];
-  stderr: string;
-
-  constructor(command: string[], stderr: string, message?: string) {
-    super(message ?? `Command failed: ${command.join(" ")}`);
-    this.name = "GitCommandError";
-    this.command = command;
-    this.stderr = stderr;
-  }
-}
-
-export async function runCommand(cmd: string[], options: { cwd?: string; allowFailure?: boolean } = {}): Promise<GitCommandResult> {
-  const { cwd, allowFailure = false } = options;
-
-  return await new Promise<GitCommandResult>((resolve, reject) => {
-    const child = spawn(cmd[0], cmd.slice(1), {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    if (child.stdout) {
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-    }
-
-    if (child.stderr) {
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-    }
-
-    child.on("error", (error) => {
-      if (allowFailure) {
-        resolve({ stdout, stderr: stderr || (error as Error).message, exitCode: 1 });
-      } else {
-        reject(error);
-      }
-    });
-
-    child.on("close", (exitCode) => {
-      if (exitCode !== 0 && !allowFailure) {
-        reject(new GitCommandError(cmd, stderr.trim()));
-        return;
-      }
-      resolve({ stdout, stderr, exitCode: exitCode ?? 0 });
-    });
-  });
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await access(target, constants.F_OK);
-    return true;
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
+import { GitCommandError, pathExists, runGitCommand, type GitCommandResult } from "./services/gitService";
 
 export interface WorktreeEntry {
   path: string;
@@ -256,7 +179,7 @@ export class WorkspaceManager {
       ...options,
       cwd: options.cwd ?? this.repoDir,
     };
-    return runCommand(["git", ...args], merged);
+    return runGitCommand(["git", ...args], merged);
   }
 
   async getWorktreeEntries(): Promise<WorktreeEntry[]> {
@@ -305,8 +228,7 @@ export class WorkspaceManager {
       worktreeMap.set(resolve(entry.path), true);
     }
 
-    const folderEntries = await fsPromises
-      .readdir(this.workspaceRoot, { withFileTypes: true })
+    const folderEntries = await readdir(this.workspaceRoot, { withFileTypes: true })
       .catch(() => [] as Dirent[]);
 
     for (const dirent of folderEntries) {

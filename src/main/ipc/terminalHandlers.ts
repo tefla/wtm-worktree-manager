@@ -1,8 +1,9 @@
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
-import type { TerminalManager, EnsureSessionParams } from "../terminalManager";
+import type { EnsureSessionParams } from "../terminalManager";
+import type { TerminalService } from "../services/terminalService";
 
 interface TerminalHandlerContext {
-  terminalManager: TerminalManager;
+  terminalService: TerminalService;
 }
 
 interface RegisterTerminalHandlersOptions {
@@ -16,14 +17,14 @@ export function registerTerminalHandlers(options: RegisterTerminalHandlersOption
 
   ipcMain.handle("terminal:ensure", (event, params: EnsureSessionParams) => {
     const context = getContext(event);
-    return context.terminalManager.ensureSession(params ?? ({} as EnsureSessionParams), event.sender.id);
+    return context.terminalService.ensureSession(params ?? ({} as EnsureSessionParams), event.sender.id);
   });
 
   ipcMain.on("terminal:write", (event, params) => {
     if (!params?.sessionId || typeof params.data !== "string") return;
     const context = findContext(event);
     if (!context) return;
-    void context.terminalManager.write(params.sessionId, params.data);
+    void context.terminalService.write(params.sessionId, params.data);
   });
 
   ipcMain.handle("terminal:resize", (event, params) => {
@@ -31,53 +32,53 @@ export function registerTerminalHandlers(options: RegisterTerminalHandlersOption
       return;
     }
     const context = getContext(event);
-    return context.terminalManager.resize(params.sessionId, params.cols, params.rows);
+    return context.terminalService.resize(params.sessionId, params.cols, params.rows);
   });
 
   ipcMain.handle("terminal:dispose", (event, params) => {
     if (!params?.sessionId) return;
     const context = getContext(event);
-    return context.terminalManager.dispose(params.sessionId, params.options || {});
+    return context.terminalService.dispose(params.sessionId, params.options || {});
   });
 
   ipcMain.handle("terminal:release", (event, params) => {
     if (!params?.sessionId) return;
     const context = getContext(event);
-    return context.terminalManager.release(params.sessionId, event.sender.id);
+    return context.terminalService.release(params.sessionId, event.sender.id);
   });
 
   ipcMain.handle("terminal:listForWorkspace", (event, params) => {
     if (!params?.workspacePath) return [];
     const context = getContext(event);
-    return context.terminalManager.listSessionsForWorkspace(params.workspacePath);
+    return context.terminalService.listSessionsForWorkspace(params.workspacePath);
   });
 
   ipcMain.handle("terminal:getWorkspaceState", (event, params) => {
     if (!params?.workspacePath) return { activeTerminal: null, terminals: {} };
     const context = getContext(event);
-    return context.terminalManager.getWorkspaceState(params.workspacePath);
+    return context.terminalService.getWorkspaceState(params.workspacePath);
   });
 
   ipcMain.handle("terminal:listSavedWorkspaces", (event) => {
     const context = getContext(event);
-    return context.terminalManager.listSavedWorkspaces();
+    return context.terminalService.listSavedWorkspaces();
   });
 
   ipcMain.handle("terminal:markQuickCommand", (event, params) => {
     if (!params?.workspacePath || !params?.slot) return;
     const context = getContext(event);
-    return context.terminalManager.markQuickCommandExecuted(params.workspacePath, params.slot);
+    return context.terminalService.markQuickCommandExecuted(params.workspacePath, params.slot);
   });
 
   ipcMain.handle("terminal:setActiveTerminal", (event, params) => {
     if (!params?.workspacePath) return;
     const context = getContext(event);
-    return context.terminalManager.setActiveTerminal(params.workspacePath, params.slot ?? null);
+    return context.terminalService.setActiveTerminal(params.workspacePath, params.slot ?? null);
   });
 
   ipcMain.handle("terminal:clearWorkspaceState", (event, params) => {
     if (!params?.workspacePath) return;
     const context = getContext(event);
-    return context.terminalManager.clearWorkspaceState(params.workspacePath);
+    return context.terminalService.clearWorkspaceState(params.workspacePath);
   });
 }
