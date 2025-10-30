@@ -4,6 +4,7 @@ import { projectReducer } from "./slices/projectSlice";
 import { settingsReducer } from "./slices/settingsSlice";
 import { jiraReducer } from "./slices/jiraSlice";
 import { notificationsReducer } from "./slices/notificationsSlice";
+import { agentReducer } from "./slices/agentSlice";
 
 export const store = configureStore({
   reducer: {
@@ -12,6 +13,7 @@ export const store = configureStore({
     settings: settingsReducer,
     jira: jiraReducer,
     notifications: notificationsReducer,
+    agent: agentReducer,
   },
 });
 

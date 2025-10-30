@@ -7,6 +7,7 @@ interface SettingsOverlayProps {
   quickAccess: QuickAccessDraft[];
   saving: boolean;
   error: string | null;
+  agentApiKey: string;
   onRequestClose: () => void;
   onSubmit: () => void;
   onIconChange: (value: string) => void;
@@ -14,6 +15,7 @@ interface SettingsOverlayProps {
   onEntryChange: (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => void;
   onEntryRemove: (id: string) => void;
   onEntryMove: (id: string, direction: "up" | "down") => void;
+  onAgentApiKeyChange: (value: string) => void;
 }
 
 export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
@@ -21,6 +23,7 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
   quickAccess,
   saving,
   error,
+  agentApiKey,
   onRequestClose,
   onSubmit,
   onIconChange,
@@ -28,6 +31,7 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
   onEntryChange,
   onEntryRemove,
   onEntryMove,
+  onAgentApiKeyChange,
 }) => {
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -69,6 +73,23 @@ export const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             />
             <span className="settings-field-note">
               Shown next to the project name and in the picker; point to an image file to update the window icon.
+            </span>
+          </label>
+        </div>
+        <div className="settings-section">
+          <h3>OpenAI Agent</h3>
+          <label className="settings-field">
+            <span>API Key</span>
+            <input
+              type="password"
+              value={agentApiKey}
+              onChange={(event) => onAgentApiKeyChange(event.target.value)}
+              placeholder="sk-..."
+              autoComplete="off"
+              disabled={saving}
+            />
+            <span className="settings-field-note">
+              Stored in the project&apos;s `.wtm/config.json`. Leave blank to clear the key.
             </span>
           </label>
         </div>

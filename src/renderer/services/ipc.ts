@@ -16,6 +16,7 @@ import type {
 import type { DockerComposeServicesSnapshot } from "../../shared/dockerCompose";
 import type { TerminalDataPayload, TerminalExitPayload } from "../types";
 import type { JiraTicketSummary } from "../../shared/jira";
+import type { AgentEvent, AgentRequest } from "../../shared/agent";
 
 type ListenerDisposer = () => void;
 
@@ -77,6 +78,13 @@ export const jiraAPI = {
     window.jiraAPI.listTickets(params),
   searchTickets: (params: { query: string; limit?: number; forceRefresh?: boolean }): Promise<JiraTicketSummary[]> =>
     window.jiraAPI.searchTickets(params),
+};
+
+export const agentAPI = {
+  sendMessage: (params: AgentRequest): Promise<{ requestId: string; messageId: string }> =>
+    window.agentAPI.sendMessage(params),
+  resetSession: (): Promise<{ success: boolean }> => window.agentAPI.resetSession(),
+  onEvent: (callback: (event: AgentEvent) => void): ListenerDisposer => window.agentAPI.onEvent(callback),
 };
 
 export const wtmEnv = {

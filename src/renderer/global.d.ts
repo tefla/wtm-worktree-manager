@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import type { JiraTicketSummary } from "../shared/jira";
 import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
+import type { AgentEvent, AgentRequest } from "../shared/agent";
 
 declare global {
   interface Window {
@@ -48,6 +49,11 @@ declare global {
     jiraAPI: {
       listTickets: (params?: { forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
       searchTickets: (params: { query: string; limit?: number; forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
+    };
+    agentAPI: {
+      sendMessage: (params: AgentRequest) => Promise<{ requestId: string; messageId: string }>;
+      resetSession: () => Promise<{ success: boolean }>;
+      onEvent: (callback: (event: AgentEvent) => void) => () => void;
     };
   }
 }

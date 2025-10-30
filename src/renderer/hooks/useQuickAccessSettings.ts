@@ -8,6 +8,7 @@ import {
   setSettingsIcon,
   setSettingsOpen,
   setSettingsSaving,
+  setSettingsAgentApiKey,
   selectSettingsState,
 } from "../store/slices/settingsSlice";
 import type { TerminalDefinition, QuickAccessDraft } from "../stateTypes";
@@ -22,18 +23,27 @@ interface UseQuickAccessSettingsOptions {
   syncWorkspaceQuickAccess: (entries: QuickAccessEntry[]) => void;
   pushToast: (message: string, kind?: ToastKind) => void;
   activeProjectIcon: string | null;
+  activeAgentApiKey: string | null;
 }
 
 export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
-  const { defaultTerminalsRef, applyProjectState, syncWorkspaceQuickAccess, pushToast, activeProjectIcon } = options;
+  const {
+    defaultTerminalsRef,
+    applyProjectState,
+    syncWorkspaceQuickAccess,
+    pushToast,
+    activeProjectIcon,
+    activeAgentApiKey,
+  } = options;
   const dispatch = useAppDispatch();
-  const { open, draft, saving, error, icon } = useAppSelector(selectSettingsState);
+  const { open, draft, saving, error, icon, agentApiKey } = useAppSelector(selectSettingsState);
 
   const settingsOpen = open;
   const settingsDraft = draft;
   const settingsSaving = saving;
   const settingsError = error;
   const settingsIcon = icon;
+  const settingsAgentApiKey = agentApiKey;
 
   const openSettingsOverlay = useCallback(() => {
     const baseDefinitions = defaultTerminalsRef.current.length
@@ -51,8 +61,9 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     );
     dispatch(setSettingsError(null));
     dispatch(setSettingsIcon(activeProjectIcon ?? ""));
+    dispatch(setSettingsAgentApiKey(activeAgentApiKey ?? ""));
     dispatch(setSettingsOpen(true));
-  }, [activeProjectIcon, defaultTerminalsRef, dispatch]);
+  }, [activeAgentApiKey, activeProjectIcon, defaultTerminalsRef, dispatch]);
 
   const closeSettingsOverlay = useCallback(() => {
     if (settingsSaving) {
@@ -61,7 +72,8 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     dispatch(setSettingsOpen(false));
     dispatch(setSettingsError(null));
     dispatch(setSettingsIcon(activeProjectIcon ?? ""));
-  }, [activeProjectIcon, dispatch, settingsSaving]);
+    dispatch(setSettingsAgentApiKey(activeAgentApiKey ?? ""));
+  }, [activeAgentApiKey, activeProjectIcon, dispatch, settingsSaving]);
 
   const updateSettingsEntry = useCallback(
     (id: string, patch: Partial<Pick<QuickAccessDraft, "label" | "quickCommand">>) => {
@@ -165,6 +177,9 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     const config: ProjectConfig = {
       icon: iconValue ? iconValue : null,
       quickAccess,
+      agent: {
+        apiKey: settingsAgentApiKey.trim() ? settingsAgentApiKey.trim() : null,
+      },
     };
     dispatch(setSettingsSaving(true));
     try {
@@ -197,12 +212,20 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     [dispatch],
   );
 
+  const handleSettingsAgentApiKeyChange = useCallback(
+    (value: string) => {
+      dispatch(setSettingsAgentApiKey(value));
+    },
+    [dispatch],
+  );
+
   return {
     settingsOpen,
     settingsDraft,
     settingsSaving,
     settingsError,
     settingsIcon,
+    settingsAgentApiKey,
     openSettingsOverlay,
     closeSettingsOverlay,
     updateSettingsEntry,
@@ -211,5 +234,6 @@ export function useQuickAccessSettings(options: UseQuickAccessSettingsOptions) {
     addSettingsEntry,
     handleSettingsSave,
     handleSettingsIconChange,
+    handleSettingsAgentApiKeyChange,
   };
 }

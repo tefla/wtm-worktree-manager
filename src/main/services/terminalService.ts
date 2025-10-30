@@ -1,7 +1,5 @@
-import type {
-  EnsureSessionParams,
-  EnsureSessionResult,
-} from "../terminalManager";
+import type { EnsureSessionParams, EnsureSessionResult } from "../terminalManager";
+import type { TerminalState, WorkspaceTerminalState } from "../terminalSessionStore";
 import { TerminalManager } from "../terminalManager";
 
 export type EnsureSessionTransform = (result: EnsureSessionResult) => EnsureSessionResult;
@@ -40,11 +38,11 @@ export class TerminalService {
     await this.manager.release(sessionId, webContentsId);
   }
 
-  async listSessionsForWorkspace(workspacePath: string): Promise<unknown> {
+  async listSessionsForWorkspace(workspacePath: string): Promise<Record<string, TerminalState>> {
     return this.manager.listSessionsForWorkspace(workspacePath);
   }
 
-  async getWorkspaceState(workspacePath: string): Promise<unknown> {
+  async getWorkspaceState(workspacePath: string): Promise<WorkspaceTerminalState> {
     return this.manager.getWorkspaceState(workspacePath);
   }
 

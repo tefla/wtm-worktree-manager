@@ -18,6 +18,8 @@ import { registerProjectHandlers } from "./ipc/projectHandlers";
 import { WorkspaceService } from "./services/workspaceService";
 import { TerminalService } from "./services/terminalService";
 import { ProjectService } from "./services/projectService";
+import { AgentService } from "./services/agentService";
+import { registerAgentHandlers } from "./ipc/agentHandlers";
 import type { ProjectState } from "../shared/ipc";
 
 const isMac = process.platform === "darwin";
@@ -36,6 +38,7 @@ interface WindowContext {
   projectManager: ProjectManager;
   projectService: ProjectService;
   dockerComposeInspector: DockerComposeInspector;
+  agentService: AgentService;
 }
 
 const windowContexts = new Map<number, WindowContext>();
@@ -50,7 +53,16 @@ function createWindowContext(target: BrowserWindow): WindowContext {
   const dockerComposeInspector = new DockerComposeInspector();
   const projectManager = new ProjectManager(workspaceManager, terminalSessionStore, dockerComposeInspector);
   const projectService = new ProjectService(projectManager);
+  const agentService = new AgentService({
+    workspaceService,
+    terminalService,
+  });
   applyWindowIcon(target, null);
+  projectService.registerStateTransform((state) => {
+    agentService.updateProjectState(state);
+    agentService.updateAgentSettings(state?.agent ?? { apiKey: null });
+    return state;
+  });
   projectService.registerStateTransform((state) => {
     applyWindowIcon(target, state);
     return state;
@@ -68,6 +80,7 @@ function createWindowContext(target: BrowserWindow): WindowContext {
     projectManager,
     projectService,
     dockerComposeInspector,
+    agentService,
   };
   windowContexts.set(target.webContents.id, context);
   return context;
@@ -106,6 +119,7 @@ async function createWindow(): Promise<BrowserWindow> {
 
   window.on("closed", () => {
     void context.terminalManager.disposeSessionsForWebContents(webContentsId);
+    context.agentService.clearSessionsForWebContents(webContentsId);
     void context.terminalSessionStore.flush().catch((error) => {
       console.error("Failed to flush terminal sessions on window close", error);
     });
@@ -166,6 +180,13 @@ app.whenReady().then(async () => {
     getContext: (event) => {
       const context = getContext(event);
       return { projectService: context.projectService };
+    },
+  });
+  registerAgentHandlers({
+    ipcMain,
+    getContext: (event) => {
+      const context = getContext(event);
+      return { agentService: context.agentService };
     },
   });
   exposeJiraHandlers();

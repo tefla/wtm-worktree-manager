@@ -61,6 +61,10 @@ export interface QuickAccessEntry {
   quickCommand: string;
 }
 
+export interface AgentSettings {
+  apiKey: string | null;
+}
+
 export interface ProjectState {
   projectPath: string;
   projectName: string;
@@ -70,11 +74,13 @@ export interface ProjectState {
   composeServices: DockerComposeServiceInfo[];
   composeError?: string | null;
   jiraTickets?: JiraTicketSummary[];
+  agent: AgentSettings;
 }
 
 export interface ProjectConfig {
   icon: string | null;
   quickAccess: QuickAccessEntry[];
+  agent: AgentSettings;
 }
 
 export interface ProjectOpenPathRequest {

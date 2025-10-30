@@ -192,6 +192,7 @@ export class ProjectManager {
     this.current.config = {
       ...normalised,
       quickAccess: normalised.quickAccess.map((entry) => ({ ...entry })),
+      agent: { ...normalised.agent },
     };
     return this.buildProjectState(this.current);
   }
@@ -206,6 +207,9 @@ export class ProjectManager {
       composeProjectName: composeSnapshot.projectName,
       composeServices: composeSnapshot.services,
       ...(composeSnapshot.error ? { composeError: composeSnapshot.error } : {}),
+      agent: {
+        apiKey: context.config.agent.apiKey ?? null,
+      },
     };
   }
 }

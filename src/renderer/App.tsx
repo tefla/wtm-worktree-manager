@@ -5,6 +5,7 @@ import { AppHeader } from "./components/AppHeader";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspaceTabsPanel } from "./components/WorkspaceTabsPanel";
 import { SettingsOverlay } from "./components/SettingsOverlay";
+import { AgentDock } from "./components/AgentDock";
 import type { BranchSuggestion } from "./components/CreateWorkspaceForm";
 import type {
   TerminalDefinition,
@@ -126,6 +127,7 @@ function App(): JSX.Element {
     composeError,
     composeLoading,
     openProjectsInNewWindow,
+    agentApiKey,
   } = useAppSelector(selectProjectState);
   const { tickets: jiraTickets } = useAppSelector(selectJiraState);
   const { toasts: toastList } = useAppSelector(selectNotificationsState);
@@ -646,6 +648,7 @@ function App(): JSX.Element {
     settingsSaving,
     settingsError,
     settingsIcon,
+    settingsAgentApiKey,
     openSettingsOverlay,
     closeSettingsOverlay,
     updateSettingsEntry,
@@ -654,12 +657,14 @@ function App(): JSX.Element {
     addSettingsEntry,
     handleSettingsSave,
     handleSettingsIconChange,
+    handleSettingsAgentApiKeyChange,
   } = useQuickAccessSettings({
     defaultTerminalsRef,
     applyProjectState,
     syncWorkspaceQuickAccess,
     pushToast,
     activeProjectIcon,
+    activeAgentApiKey: agentApiKey,
   });
 
   useEffect(() => {
@@ -1676,6 +1681,7 @@ function App(): JSX.Element {
           quickAccess={settingsDraft}
           saving={settingsSaving}
           error={settingsError}
+          agentApiKey={settingsAgentApiKey}
           onRequestClose={closeSettingsOverlay}
           onSubmit={handleSettingsSave}
           onIconChange={handleSettingsIconChange}
@@ -1683,6 +1689,7 @@ function App(): JSX.Element {
           onEntryChange={updateSettingsEntry}
           onEntryRemove={removeSettingsEntry}
           onEntryMove={moveSettingsEntry}
+          onAgentApiKeyChange={handleSettingsAgentApiKeyChange}
         />
       ) : null}
 
@@ -1693,6 +1700,7 @@ function App(): JSX.Element {
           </div>
         ))}
       </div>
+      <AgentDock />
     </div>
   );
 }

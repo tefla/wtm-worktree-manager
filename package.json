@@ -19,13 +19,16 @@
     "coverage": "NODE_OPTIONS=--enable-source-maps npx --yes c8 --reporter=text --reporter=lcov npm run test:unit"
   },
   "dependencies": {
+    "@openai/agents": "^0.2.1",
     "@reduxjs/toolkit": "^2.9.2",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "node-pty": "^1.0.0",
+    "openai": "^4.104.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-redux": "^9.2.0"
+    "react-redux": "^9.2.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@playwright/test": "^1.47.2",

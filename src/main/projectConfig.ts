@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import type { ProjectConfig, QuickAccessEntry } from "../shared/ipc";
+import type { AgentSettings, ProjectConfig, QuickAccessEntry } from "../shared/ipc";
 
 export type { ProjectConfig, QuickAccessEntry } from "../shared/ipc";
 
@@ -24,6 +24,9 @@ export function defaultProjectConfig(): ProjectConfig {
   return {
     icon: null,
     quickAccess: cloneQuickAccess(DEFAULT_QUICK_ACCESS),
+    agent: {
+      apiKey: null,
+    },
   };
 }
 
@@ -89,6 +92,16 @@ function normaliseQuickAccess(list: unknown): QuickAccessEntry[] {
   return normalised;
 }
 
+function normaliseAgentSettings(value: unknown): AgentSettings {
+  if (!value || typeof value !== "object") {
+    return { apiKey: null };
+  }
+  const apiKeyRaw = (value as AgentSettings).apiKey;
+  const apiKey =
+    typeof apiKeyRaw === "string" && apiKeyRaw.trim().length > 0 ? apiKeyRaw.trim() : null;
+  return { apiKey };
+}
+
 export function normaliseProjectConfig(raw: unknown): ProjectConfig {
   if (!raw || typeof raw !== "object") {
     return defaultProjectConfig();
@@ -97,10 +110,12 @@ export function normaliseProjectConfig(raw: unknown): ProjectConfig {
   const source = raw as Record<string, unknown>;
   const icon = normaliseIcon(source.icon);
   const quickAccess = normaliseQuickAccess(source.quickAccess);
+  const agent = normaliseAgentSettings(source.agent);
 
   return {
     icon,
     quickAccess,
+    agent,
   };
 }
 

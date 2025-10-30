@@ -7,6 +7,7 @@ export interface SettingsState {
   saving: boolean;
   error: string | null;
   icon: string;
+  agentApiKey: string;
 }
 
 const initialState: SettingsState = {
@@ -15,6 +16,7 @@ const initialState: SettingsState = {
   saving: false,
   error: null,
   icon: "",
+  agentApiKey: "",
 };
 
 const settingsSlice = createSlice({
@@ -36,11 +38,20 @@ const settingsSlice = createSlice({
     setSettingsIcon(state, action: PayloadAction<string>) {
       state.icon = action.payload;
     },
+    setSettingsAgentApiKey(state, action: PayloadAction<string>) {
+      state.agentApiKey = action.payload;
+    },
   },
 });
 
-export const { setSettingsOpen, setSettingsDraft, setSettingsSaving, setSettingsError, setSettingsIcon } =
-  settingsSlice.actions;
+export const {
+  setSettingsOpen,
+  setSettingsDraft,
+  setSettingsSaving,
+  setSettingsError,
+  setSettingsIcon,
+  setSettingsAgentApiKey,
+} = settingsSlice.actions;
 
 export const settingsReducer = settingsSlice.reducer;
 

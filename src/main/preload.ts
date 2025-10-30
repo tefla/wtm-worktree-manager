@@ -18,6 +18,7 @@ import type {
 } from "../shared/ipc";
 import type { DockerComposeServicesSnapshot } from "../shared/dockerCompose";
 import type { JiraTicketSummary } from "../shared/jira";
+import type { AgentEvent, AgentRequest } from "../shared/agent";
 
 type ListenerDisposer = () => void;
 
@@ -66,6 +67,12 @@ type TerminalAPI = {
 type JiraAPI = {
   listTickets: (params?: { forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
   searchTickets: (params: { query: string; limit?: number; forceRefresh?: boolean }) => Promise<JiraTicketSummary[]>;
+};
+
+type AgentAPI = {
+  sendMessage: (params: AgentRequest) => Promise<{ requestId: string; messageId: string }>;
+  resetSession: () => Promise<{ success: boolean }>;
+  onEvent: (callback: (event: AgentEvent) => void) => ListenerDisposer;
 };
 
 const invoke = (channel: string, payload?: unknown) => ipcRenderer.invoke(channel, payload);
@@ -119,12 +126,19 @@ contextBridge.exposeInMainWorld("jiraAPI", {
   searchTickets: (params) => invoke("jira:searchTickets", params),
 } satisfies JiraAPI);
 
+contextBridge.exposeInMainWorld("agentAPI", {
+  sendMessage: (params: AgentRequest) => invoke("agent:sendMessage", params),
+  resetSession: () => invoke("agent:resetSession"),
+  onEvent: (callback: (event: AgentEvent) => void) => addListener<AgentEvent>("agent:event", callback),
+} satisfies AgentAPI);
+
 declare global {
   interface Window {
     workspaceAPI: WorkspaceAPI;
     projectAPI: ProjectAPI;
     terminalAPI: TerminalAPI;
     jiraAPI: JiraAPI;
+    agentAPI: AgentAPI;
     wtmEnv?: {
       e2eProjectPath: string | null;
     };

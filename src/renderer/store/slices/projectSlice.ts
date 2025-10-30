@@ -14,6 +14,7 @@ export interface ProjectFeatureState {
   composeError: string | null;
   composeLoading: boolean;
   openProjectsInNewWindow: boolean;
+  agentApiKey: string | null;
 }
 
 const persistedProjects = loadRecentProjects();
@@ -29,6 +30,7 @@ const initialState: ProjectFeatureState = {
   composeError: null,
   composeLoading: false,
   openProjectsInNewWindow: persistedPreferences.openProjectsInNewWindow,
+  agentApiKey: null,
 };
 
 const projectSlice = createSlice({
@@ -88,6 +90,7 @@ const projectSlice = createSlice({
       state.composeServices = action.payload.composeServices;
       state.composeError = action.payload.composeError ?? null;
       state.composeLoading = false;
+      state.agentApiKey = action.payload.agent?.apiKey ?? null;
     },
     resetProject(state) {
       state.composeProjectName = null;
@@ -96,6 +99,7 @@ const projectSlice = createSlice({
       state.activeProjectPath = null;
       state.activeProjectName = "";
       state.activeProjectIcon = null;
+      state.agentApiKey = null;
     },
   },
 });
