@@ -25,6 +25,7 @@ import type {
   WorkspaceSummary,
 } from "./types";
 import { buildWorkspaceBranchName } from "../shared/jira";
+import { normalizeBranchName } from "../shared/branch";
 import type { JiraTicketSummary } from "../shared/jira";
 import type { ToastKind } from "./store/types";
 import {
@@ -1047,7 +1048,7 @@ function App(): JSX.Element {
   const handleCreateWorkspace = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      const branch = branchInput.trim();
+      const branch = normalizeBranchName(branchInput, { fallback: "" });
       const baseRef = baseInput.trim();
       if (!branch) {
         pushToast("Branch name is required", "error");
@@ -1056,6 +1057,9 @@ function App(): JSX.Element {
       if (!activeProjectPath) {
         pushToast("Open a project before creating workspaces", "error");
         return;
+      }
+      if (branch !== branchInput) {
+        dispatch(setBranchInput(branch));
       }
       dispatch(setCreateInFlight(true));
       try {
