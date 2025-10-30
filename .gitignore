@@ -4,6 +4,7 @@ dist/
 release/
 test-results/
 tmp/
+coverage/
 nohup.out
 .idea/
 
