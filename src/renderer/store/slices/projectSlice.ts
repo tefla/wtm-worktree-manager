@@ -48,6 +48,10 @@ const projectSlice = createSlice({
       state.recentProjects = action.payload;
       persistRecentProjects(state.recentProjects);
     },
+    removeRecentProject(state, action: PayloadAction<string>) {
+      state.recentProjects = state.recentProjects.filter((project) => project.path !== action.payload);
+      persistRecentProjects(state.recentProjects);
+    },
     addRecentProject(state, action: PayloadAction<RecentProject>) {
       state.recentProjects = upsertRecentProject(state.recentProjects, action.payload);
       persistRecentProjects(state.recentProjects);
@@ -105,6 +109,7 @@ export const {
   setActiveProjectName,
   setActiveProjectIcon,
   setRecentProjects,
+  removeRecentProject,
   addRecentProject,
   setComposeProjectName,
   setComposeServices,
