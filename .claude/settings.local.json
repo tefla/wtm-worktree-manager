@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(chmod:*)",
+      "Bash(git worktree:*)",
+      "Bash(tmux list-sessions:*)",
+      "Bash(/usr/bin/tmux list-sessions:*)",
+      "Bash(echo:*)",
+      "Bash(npm install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
