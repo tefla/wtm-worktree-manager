@@ -187,7 +187,7 @@ impl App {
         let titles: Vec<Line> = workspace
             .tabs
             .iter()
-            .map(|tab| Line::from(tab.title().to_string()))
+            .map(|tab| Line::from(tab.title()))
             .collect();
 
         let tabs = Tabs::new(titles)
@@ -485,9 +485,7 @@ impl App {
                 break;
             }
 
-            let title_width = Line::from(tab.title().to_string())
-                .width()
-                .min(u16::MAX as usize) as u16;
+            let title_width = Line::from(tab.title()).width().min(u16::MAX as usize) as u16;
             let title_width = title_width.min(remaining_width);
             let title_end = x.saturating_add(title_width);
             if column < title_end {

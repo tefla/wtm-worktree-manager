@@ -7,16 +7,20 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, RwLock},
     thread,
+    time::Duration,
 };
+use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, RefreshKind, System};
 use tui_term::vt100;
 
 pub(super) struct PtyTab {
-    title: String,
+    base_title: String,
+    title: Arc<RwLock<String>>,
     parser: Arc<RwLock<vt100::Parser>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     reader_handle: Option<thread::JoinHandle<()>>,
+    title_monitor_handle: Option<thread::JoinHandle<()>>,
     exit_status: Arc<Mutex<Option<bool>>>,
     size: TerminalSize,
 }
@@ -38,6 +42,7 @@ impl PtyTab {
             .slave
             .spawn_command(command)
             .context("failed to spawn shell for terminal tab")?;
+        let shell_pid = child.process_id();
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader()?;
@@ -60,20 +65,34 @@ impl PtyTab {
             reader_loop(reader, parser_clone, exit_flag, reader_child, writer_clone);
         });
 
+        let base_title = title.to_string();
+        let title_state = Arc::new(RwLock::new(base_title.clone()));
+        let title_monitor_handle = spawn_title_monitor(
+            shell_pid,
+            base_title.clone(),
+            Arc::clone(&title_state),
+            exit_status.clone(),
+        );
+
         Ok(Self {
-            title: title.to_string(),
+            base_title,
+            title: title_state,
             parser,
             writer,
             child: child_handle,
             master: Arc::new(Mutex::new(master)),
             reader_handle: Some(reader_handle),
+            title_monitor_handle,
             exit_status,
             size,
         })
     }
 
-    pub fn title(&self) -> &str {
-        &self.title
+    pub fn title(&self) -> String {
+        self.title
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| self.base_title.clone())
     }
 
     pub fn parser_handle(&self) -> Arc<RwLock<vt100::Parser>> {
@@ -135,6 +154,9 @@ impl Drop for PtyTab {
             }
         }
         if let Some(handle) = self.reader_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.title_monitor_handle.take() {
             let _ = handle.join();
         }
         if let Ok(mut status) = self.exit_status.lock() {
@@ -207,6 +229,166 @@ fn respond_with_cursor(
         let _ = handle.write_all(response.as_bytes());
         let _ = handle.flush();
     }
+}
+
+fn spawn_title_monitor(
+    process_id: Option<u32>,
+    base_title: String,
+    title: Arc<RwLock<String>>,
+    exit_flag: Arc<Mutex<Option<bool>>>,
+) -> Option<thread::JoinHandle<()>> {
+    let Some(id) = process_id else {
+        return None;
+    };
+    let Some(sysinfo_pid) = to_sysinfo_pid(id) else {
+        return None;
+    };
+
+    thread::Builder::new()
+        .name("wtm-title-monitor".into())
+        .spawn(move || {
+            monitor_foreground_process(sysinfo_pid, base_title, title, exit_flag);
+        })
+        .ok()
+}
+
+fn monitor_foreground_process(
+    shell_pid: Pid,
+    base_title: String,
+    title: Arc<RwLock<String>>,
+    exit_flag: Arc<Mutex<Option<bool>>>,
+) {
+    let mut system = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    let mut last_title = String::new();
+    loop {
+        if should_stop(&exit_flag) {
+            update_title(&title, &base_title);
+            break;
+        }
+
+        system.refresh_processes_specifics(ProcessRefreshKind::everything());
+        let next_title = determine_tab_title(&system, shell_pid, &base_title);
+
+        if next_title != last_title {
+            update_title(&title, &next_title);
+            last_title = next_title;
+        }
+
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn should_stop(exit_flag: &Arc<Mutex<Option<bool>>>) -> bool {
+    exit_flag.lock().map(|flag| flag.is_some()).unwrap_or(true)
+}
+
+fn update_title(title: &Arc<RwLock<String>>, value: &str) {
+    if let Ok(mut guard) = title.write() {
+        *guard = value.to_string();
+    }
+}
+
+fn determine_tab_title(system: &System, shell_pid: Pid, base_title: &str) -> String {
+    let program = active_program_name(system, shell_pid).unwrap_or_else(|| {
+        system
+            .process(shell_pid)
+            .map(process_display_name)
+            .unwrap_or_default()
+    });
+    compose_title(&program, base_title)
+}
+
+fn active_program_name(system: &System, shell_pid: Pid) -> Option<String> {
+    let mut current_pid = shell_pid;
+    loop {
+        let process = system.process(current_pid)?;
+        let mut children: Vec<Pid> = system
+            .processes()
+            .iter()
+            .filter_map(|(&pid, proc_)| (proc_.parent() == Some(current_pid)).then_some(pid))
+            .collect();
+
+        if children.is_empty() || !system.processes().contains_key(&current_pid) {
+            return Some(process_display_name(process));
+        }
+
+        let mut chosen_pid = None;
+        let mut best_cpu = f32::MIN;
+        for pid in &children {
+            if let Some(child) = system.process(*pid) {
+                let cpu = child.cpu_usage();
+                if matches!(
+                    child.status(),
+                    ProcessStatus::Run | ProcessStatus::Unknown(_)
+                ) && cpu >= best_cpu
+                {
+                    best_cpu = cpu;
+                    chosen_pid = Some(*pid);
+                }
+            }
+        }
+
+        if chosen_pid.is_none() {
+            children.sort_unstable();
+            chosen_pid = children.into_iter().next();
+        }
+
+        let next_pid = chosen_pid.unwrap_or(current_pid);
+        if next_pid == current_pid {
+            return Some(process_display_name(process));
+        }
+        current_pid = next_pid;
+    }
+}
+
+fn process_display_name(process: &sysinfo::Process) -> String {
+    let mut label = if process.cmd().is_empty() {
+        process.name().to_string()
+    } else {
+        process.cmd().join(" ")
+    };
+    if label.is_empty() {
+        label = process.name().to_string();
+    }
+    truncate(&label, 80)
+}
+
+fn compose_title(program: &str, base_title: &str) -> String {
+    let program = truncate(program, 80);
+    let base = truncate(base_title, 40);
+    if program.is_empty() {
+        base
+    } else if program == base {
+        program
+    } else if base.is_empty() {
+        program
+    } else {
+        format!("{program} - {base}")
+    }
+}
+
+fn truncate(input: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    for (idx, ch) in input.chars().enumerate() {
+        if idx >= max_len {
+            if max_len > 3 {
+                result.truncate(max_len - 3);
+                result.push_str("...");
+            }
+            return result;
+        }
+        result.push(ch);
+    }
+    result
+}
+
+fn to_sysinfo_pid(process_id: u32) -> Option<Pid> {
+    Some(Pid::from_u32(process_id))
 }
 
 pub fn default_shell() -> String {
