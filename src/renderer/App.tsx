@@ -680,7 +680,43 @@ function App(): JSX.Element {
   const startTerminalSession = useCallback(
     async (workspaceState: WorkspaceTabState, record: TerminalRecord, container: HTMLDivElement) => {
       const key = runtimeKey(workspaceState.workspace.path, record.key);
-      if (runtimeRef.current.has(key) && record.sessionId && !record.closed) {
+      const existingRuntime = runtimeRef.current.get(key);
+      if (existingRuntime && record.sessionId && !record.closed) {
+        if (existingRuntime.container !== container) {
+          existingRuntime.resizeObserver.disconnect();
+          while (container.firstChild) {
+            container.removeChild(container.firstChild);
+          }
+          const previousContainer = existingRuntime.container;
+          while (previousContainer.firstChild) {
+            container.appendChild(previousContainer.firstChild);
+          }
+          const resizeObserver = new ResizeObserver(() => {
+            existingRuntime.fitAddon.fit();
+            if (record.sessionId && !record.closed) {
+              void terminalAPI
+                .resize(record.sessionId, existingRuntime.terminal.cols, existingRuntime.terminal.rows)
+                .catch((error) => console.warn("Failed to resize terminal", error));
+            }
+          });
+          resizeObserver.observe(container);
+          existingRuntime.container = container;
+          existingRuntime.resizeObserver = resizeObserver;
+          runtimeRef.current.set(key, existingRuntime);
+          requestAnimationFrame(() => {
+            existingRuntime.fitAddon.fit();
+            if (record.sessionId && !record.closed) {
+              if (workspaceState.activeTerminalKey === record.key) {
+                existingRuntime.terminal.focus();
+              }
+              void terminalAPI
+                .resize(record.sessionId, existingRuntime.terminal.cols, existingRuntime.terminal.rows)
+                .catch((error) => console.warn("Failed to resize terminal", error));
+            }
+          });
+        }
+        record.shouldStart = false;
+        record.closed = false;
         return;
       }
 
