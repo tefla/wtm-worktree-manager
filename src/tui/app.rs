@@ -5,9 +5,11 @@ use crate::{
     wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path},
 };
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
@@ -18,6 +20,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use tui_term::widget::{Cursor, PseudoTerminal};
+
+const TAB_PADDING_WIDTH: u16 = 1;
+const TAB_DIVIDER_WIDTH: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -44,6 +49,8 @@ pub(super) struct App {
     terminal_size: TerminalSize,
     terminal_view_size: Option<TerminalSize>,
     status_message: Option<String>,
+    sidebar_area: Option<Rect>,
+    tab_inner_area: Option<Rect>,
 }
 
 impl App {
@@ -75,6 +82,8 @@ impl App {
             terminal_size: size,
             terminal_view_size: None,
             status_message: None,
+            sidebar_area: None,
+            tab_inner_area: None,
         })
     }
 
@@ -103,6 +112,7 @@ impl App {
     pub fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key)?,
+            Event::Mouse(mouse) => self.handle_mouse(mouse)?,
             Event::Resize(width, height) => {
                 self.terminal_size = TerminalSize::new(height, width);
             }
@@ -121,7 +131,9 @@ impl App {
         }
     }
 
-    fn draw_sidebar(&self, frame: &mut Frame<'_>, area: Rect) {
+    fn draw_sidebar(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        self.sidebar_area = Some(area);
+
         let mut state = ListState::default();
         if !self.workspaces.is_empty() {
             state.select(Some(self.selected_workspace));
@@ -145,6 +157,8 @@ impl App {
     }
 
     fn draw_main(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        self.tab_inner_area = None;
+
         if matches!(self.mode, Mode::QuickActions) {
             self.draw_quick_actions(frame, area);
             return;
@@ -164,6 +178,11 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(1)])
             .split(area);
+
+        let inner = chunks[0].inner(Margin::new(1, 1));
+        if !inner.is_empty() {
+            self.tab_inner_area = Some(inner);
+        }
 
         let titles: Vec<Line> = workspace
             .tabs
@@ -346,6 +365,163 @@ impl App {
                 Ok(())
             }
         }
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent) -> Result<()> {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                if matches!(self.mode, Mode::Help) {
+                    self.mode = Mode::Navigation;
+                    return Ok(());
+                }
+
+                if !matches!(self.mode, Mode::Navigation | Mode::TerminalInput) {
+                    return Ok(());
+                }
+
+                let column = event.column;
+                let row = event.row;
+
+                let mut interacted = false;
+                if self.handle_sidebar_click(column, row) {
+                    interacted = true;
+                } else if self.handle_tab_bar_click(column, row) {
+                    interacted = true;
+                }
+
+                if interacted {
+                    if matches!(self.mode, Mode::TerminalInput) {
+                        self.mode = Mode::Navigation;
+                    }
+                    self.clear_status();
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_sidebar_click(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self.sidebar_area else {
+            return false;
+        };
+        let inner = area.inner(Margin::new(1, 1));
+        if inner.is_empty() {
+            return false;
+        }
+        if column < inner.left() || column >= inner.right() {
+            return false;
+        }
+        if row < inner.top() || row >= inner.bottom() {
+            return false;
+        }
+
+        let index = usize::from(row - inner.top());
+        if index >= self.workspaces.len() {
+            return false;
+        }
+
+        if self.selected_workspace != index {
+            self.selected_workspace = index;
+        }
+        true
+    }
+
+    fn handle_tab_bar_click(&mut self, column: u16, row: u16) -> bool {
+        let Some(tab_area) = self.tab_inner_area else {
+            return false;
+        };
+
+        if tab_area.is_empty()
+            || column < tab_area.left()
+            || column >= tab_area.right()
+            || row < tab_area.top()
+            || row >= tab_area.bottom()
+        {
+            return false;
+        }
+
+        let target = {
+            let Some(workspace) = self.workspaces.get(self.selected_workspace) else {
+                return false;
+            };
+            Self::tab_index_at(workspace, tab_area, column)
+        };
+
+        if let Some(idx) = target {
+            if let Some(workspace) = self.workspaces.get_mut(self.selected_workspace) {
+                if workspace.active_tab != idx {
+                    workspace.active_tab = idx;
+                }
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn tab_index_at(workspace: &WorkspaceState, area: Rect, column: u16) -> Option<usize> {
+        if workspace.tabs.is_empty() || area.is_empty() {
+            return None;
+        }
+
+        let mut x = area.left();
+        let len = workspace.tabs.len();
+        for (idx, tab) in workspace.tabs.iter().enumerate() {
+            let last = idx == len - 1;
+            let mut remaining_width = area.right().saturating_sub(x);
+            if remaining_width == 0 {
+                break;
+            }
+
+            let left_pad = TAB_PADDING_WIDTH.min(remaining_width);
+            let left_pad_end = x.saturating_add(left_pad);
+            if column < left_pad_end {
+                return Some(idx);
+            }
+            x = left_pad_end;
+            remaining_width = area.right().saturating_sub(x);
+            if remaining_width == 0 {
+                break;
+            }
+
+            let title_width = Line::from(tab.title().to_string())
+                .width()
+                .min(u16::MAX as usize) as u16;
+            let title_width = title_width.min(remaining_width);
+            let title_end = x.saturating_add(title_width);
+            if column < title_end {
+                return Some(idx);
+            }
+            x = title_end;
+            remaining_width = area.right().saturating_sub(x);
+            if remaining_width == 0 {
+                break;
+            }
+
+            let right_pad = TAB_PADDING_WIDTH.min(remaining_width);
+            let right_pad_end = x.saturating_add(right_pad);
+            if column < right_pad_end {
+                return Some(idx);
+            }
+            x = right_pad_end;
+
+            if last {
+                break;
+            }
+
+            remaining_width = area.right().saturating_sub(x);
+            if remaining_width == 0 {
+                break;
+            }
+            let divider_width = TAB_DIVIDER_WIDTH.min(remaining_width);
+            let divider_end = x.saturating_add(divider_width);
+            if column < divider_end {
+                return None;
+            }
+            x = divider_end;
+        }
+        None
     }
 
     fn handle_navigation_key(&mut self, key: KeyEvent) -> Result<()> {
