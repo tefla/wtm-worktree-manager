@@ -45,6 +45,7 @@ import {
   setActiveProjectName,
   setActiveProjectIcon,
   setActiveProjectPath,
+  removeRecentProject,
   addRecentProject,
   setComposeProjectName,
   setComposeServices,
@@ -1020,6 +1021,17 @@ function App(): JSX.Element {
     [activeProjectPath, openProjectByPath, openProjectsInNewWindow],
   );
 
+  const handleRemoveRecentProject = useCallback(
+    (path: string) => {
+      const trimmed = path.trim();
+      if (!trimmed) {
+        return;
+      }
+      dispatch(removeRecentProject(trimmed));
+    },
+    [dispatch],
+  );
+
   const handleOpenProjectDialog = useCallback(() => {
     void openProjectWithDialog({ openInNewWindow: openProjectsInNewWindow });
   }, [openProjectWithDialog, openProjectsInNewWindow]);
@@ -1672,6 +1684,7 @@ function App(): JSX.Element {
         activeProjectPath={activeProjectPath}
         refreshing={refreshing}
         onSelectProject={handleProjectSelect}
+        onRemoveProject={handleRemoveRecentProject}
         onOpenProject={handleOpenProjectDialog}
         onRefreshAll={handleRefreshAll}
         createWorkspace={{
