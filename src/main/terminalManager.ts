@@ -148,11 +148,13 @@ export class TerminalManager {
     }
     this.workspaceIndex.get(absPath)?.set(slot, sessionId);
 
-    await this.store.ensureTerminal(absPath, slot, { label });
+    const terminalState = await this.store.ensureTerminal(absPath, slot, { label });
+    let history = terminalState.history ?? "";
 
     const pending = hostResult.pendingOutput ?? "";
     if (pending) {
       await this.store.appendHistory(absPath, slot, pending);
+      history = terminalState.history ?? history.concat(pending);
     }
 
     return {
@@ -162,7 +164,7 @@ export class TerminalManager {
       command: binding.command,
       args: binding.args,
       existing: hostResult.existing,
-      history: "",
+      history,
       quickCommandExecuted,
       lastExitCode,
       lastSignal,
