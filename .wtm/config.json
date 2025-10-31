@@ -1,0 +1,10 @@
+{
+  "icon": "🤖",
+  "quickAccess": [
+    {
+      "label": "Show Git Status",
+      "quickCommand": "git status",
+      "type": "command"
+    }
+  ]
+}
