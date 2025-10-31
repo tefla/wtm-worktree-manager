@@ -48,10 +48,8 @@ const defaultWidgets: WidgetDefinition[] = [
       const { workspace, callbacks } = context;
       return (
         <WorkspaceTabsPanel
-          workspaceOrder={workspace.order}
           workspaceTabs={workspace.tabs}
           activeWorkspacePath={workspace.activePath}
-          onSelectWorkspace={callbacks.selectWorkspaceTab}
           onRefreshWorkspace={callbacks.refreshWorkspace}
           onDeleteWorkspace={callbacks.deleteWorkspace}
           onAddTerminal={callbacks.addTerminal}
