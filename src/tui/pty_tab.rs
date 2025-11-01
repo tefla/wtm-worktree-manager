@@ -39,6 +39,7 @@ impl PtyTab {
 
         let mut command = CommandBuilder::new(default_shell());
         command.cwd(cwd);
+        command.env("PWD", cwd);
 
         let child = pair
             .slave
