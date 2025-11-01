@@ -1,4 +1,5 @@
 /target
 .wtm/
+/.claude/
 !.wtm/workspaces/
 !.wtm/workspaces/.gitkeep
