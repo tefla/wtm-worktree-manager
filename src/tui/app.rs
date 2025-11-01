@@ -2,6 +2,7 @@ use super::{pty_tab::PtyTab, size::TerminalSize};
 use crate::{
     config::QuickAction,
     git::{self, WorktreeInfo},
+    jira::{self, JiraTicket},
     wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path},
 };
 use anyhow::Result;
@@ -14,7 +15,7 @@ use ratatui::{
     Frame,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 use tui_term::widget::{Cursor, PseudoTerminal};
@@ -205,6 +206,35 @@ impl App {
                 chunks[1],
             );
         }
+
+        if matches!(self.mode, Mode::Adding) {
+            if let Some(state) = self.add_state.as_ref() {
+                if state.overlay_visible() {
+                    let overlay_area = centered_rect(60, 50, chunks[1]);
+                    frame.render_widget(Clear, overlay_area);
+
+                    let items: Vec<ListItem> = state
+                        .filtered_tickets()
+                        .map(|ticket| {
+                            let slug = ticket.slug();
+                            let text = format!("{}  {}  [{}]", ticket.key, ticket.summary, slug);
+                            ListItem::new(Line::from(text))
+                        })
+                        .collect();
+
+                    let mut list_state = ListState::default();
+                    list_state.select(state.selected_filtered_index());
+
+                    let list = List::new(items).block(
+                        Block::default()
+                            .title("Jira tickets (Tab: insert • Ctrl+R: refresh • Ctrl+Shift+R: clear)")
+                            .borders(Borders::ALL),
+                    );
+
+                    frame.render_stateful_widget(list, overlay_area, &mut list_state);
+                }
+            }
+        }
     }
 
     fn draw_quick_actions(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -261,11 +291,15 @@ impl App {
                 .as_ref()
                 .map(|state| {
                     let preview = state.target_preview(&self.workspace_root);
-                    format!(
-                        "[ADD] Branch: {} ⇒ {}  (Enter: confirm • Esc: cancel)",
+                    let mut text = format!(
+                        "[ADD] Branch: {} ⇒ {}  (Enter: confirm • Esc: cancel • Tab: insert suggestion • Ctrl+R: refresh)",
                         state.branch_display(),
                         preview.display()
-                    )
+                    );
+                    if state.branch_exists() {
+                        text.push_str(" • Warning: branch already exists");
+                    }
+                    text
                 })
                 .unwrap_or_else(|| "[ADD] Enter branch name (Enter: confirm • Esc: cancel)".into()),
             Mode::Removing => {
@@ -318,6 +352,11 @@ impl App {
             "  Enter: focus terminal".into(),
             "  Ctrl+Space (while focused): exit terminal".into(),
             "  a: add worktree".into(),
+            "    ↳ Tab (adding): insert highlighted Jira suggestion".into(),
+            "    ↳ Ctrl+R (adding): refresh Jira suggestions".into(),
+            "    ↳ Ctrl+Shift+R (adding): clear Jira cache".into(),
+            "    ↳ Ctrl+Space (adding): toggle suggestions".into(),
+            "    ↳ ↑/↓ (adding): navigate suggestions".into(),
             "  p: prune worktree".into(),
             "  c: open quick actions".into(),
             "  ?: toggle this help".into(),
@@ -396,11 +435,20 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('a') => {
-                self.mode = Mode::Adding;
-                self.add_state = Some(AddWorktreeState::default());
-                self.clear_status();
-            }
+            KeyCode::Char('a') => match AddWorktreeState::new(&self.repo_root) {
+                Ok((state, warning)) => {
+                    self.mode = Mode::Adding;
+                    self.add_state = Some(state);
+                    if let Some(message) = warning {
+                        self.set_status(message);
+                    } else {
+                        self.clear_status();
+                    }
+                }
+                Err(err) => {
+                    self.set_status(format!("Failed to prepare add workflow: {err}"));
+                }
+            },
             KeyCode::Char('p') => {
                 if let Some(ws) = self.workspaces.get(self.selected_workspace) {
                     if ws.is_primary(&self.repo_root) {
@@ -454,6 +502,39 @@ impl App {
     }
 
     fn handle_add_worktree_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    if let Some(state) = self.add_state.as_mut() {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            match state.clear_cache(&self.repo_root) {
+                                Ok(_) => self.set_status("Cleared Jira ticket cache."),
+                                Err(err) => {
+                                    self.set_status(format!("Failed to clear Jira cache: {err}"))
+                                }
+                            }
+                        } else {
+                            match state.refresh_data(&self.repo_root) {
+                                Ok(count) => {
+                                    self.set_status(format!("Refreshed Jira tickets ({count})"))
+                                }
+                                Err(err) => self
+                                    .set_status(format!("Failed to refresh Jira tickets: {err}")),
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(state) = self.add_state.as_mut() {
+                        state.toggle_overlay();
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Esc => {
                 self.add_state = None;
@@ -464,19 +545,40 @@ impl App {
                     self.mode = Mode::Navigation;
                     return Ok(());
                 };
-                if state.branch.trim().is_empty() {
+                let branch_name = state.branch_trimmed().to_string();
+                if branch_name.is_empty() {
                     self.set_status("Branch name is required.");
                     self.add_state = Some(state);
                     return Ok(());
                 }
                 self.workspace_root = ensure_workspace_root(&self.repo_root)?;
-                let branch_name = state.branch.trim().to_string();
                 let dir_name = branch_dir_name(&branch_name);
                 let worktree_path = next_available_workspace_path(&self.workspace_root, &dir_name);
-                match git::add_worktree(&self.repo_root, &worktree_path, Some(branch_name.as_str()))
-                {
+                let branch_exists = state.branch_exists();
+                let result = if branch_exists {
+                    git::add_worktree_for_branch(
+                        &self.repo_root,
+                        &worktree_path,
+                        branch_name.as_str(),
+                    )
+                } else {
+                    git::add_worktree(&self.repo_root, &worktree_path, Some(branch_name.as_str()))
+                };
+                match result {
                     Ok(_) => {
-                        self.set_status(format!("Created worktree {}", worktree_path.display()));
+                        if branch_exists {
+                            self.set_status(format!(
+                                "Added worktree {} for existing branch {}",
+                                worktree_path.display(),
+                                branch_name
+                            ));
+                        } else {
+                            self.set_status(format!(
+                                "Created worktree {} for new branch {}",
+                                worktree_path.display(),
+                                branch_name
+                            ));
+                        }
                         self.refresh_worktrees()?;
                         if let Some(idx) = self.index_of_path(&worktree_path) {
                             self.selected_workspace = idx;
@@ -487,6 +589,23 @@ impl App {
                     }
                 }
                 self.mode = Mode::Navigation;
+            }
+            KeyCode::Up => {
+                if let Some(state) = self.add_state.as_mut() {
+                    state.move_selection_up();
+                }
+            }
+            KeyCode::Down => {
+                if let Some(state) = self.add_state.as_mut() {
+                    state.move_selection_down();
+                }
+            }
+            KeyCode::Tab => {
+                if let Some(state) = self.add_state.as_mut() {
+                    if !state.accept_selection() {
+                        self.set_status("No suggestion selected.");
+                    }
+                }
             }
             KeyCode::Backspace => {
                 if let Some(state) = self.add_state.as_mut() {
@@ -780,18 +899,108 @@ impl WorkspaceState {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AddWorktreeState {
     branch: String,
+    tickets: Vec<JiraTicket>,
+    filtered: Vec<usize>,
+    selection: Option<usize>,
+    show_overlay: bool,
+    existing_branches: HashSet<String>,
+    branch_exists: bool,
 }
 
 impl AddWorktreeState {
-    fn backspace(&mut self) {
-        self.branch.pop();
+    fn new(repo_root: &Path) -> Result<(Self, Option<String>)> {
+        let mut warnings = Vec::new();
+
+        let tickets = match jira::cached_tickets(repo_root) {
+            Ok(tickets) => tickets,
+            Err(err) => {
+                warnings.push(format!("Failed to load Jira cache: {err}"));
+                Vec::new()
+            }
+        };
+
+        let branches = match git::list_branches(repo_root) {
+            Ok(branches) => branches.into_iter().collect::<HashSet<_>>(),
+            Err(err) => {
+                warnings.push(format!("Failed to list git branches: {err}"));
+                HashSet::new()
+            }
+        };
+
+        let mut state = Self {
+            branch: String::new(),
+            tickets,
+            filtered: Vec::new(),
+            selection: None,
+            show_overlay: true,
+            existing_branches: branches,
+            branch_exists: false,
+        };
+        state.recompute_filters();
+        let warning = if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join(" | "))
+        };
+        Ok((state, warning))
     }
 
-    fn push_char(&mut self, c: char) {
-        self.branch.push(c);
+    fn refresh_data(&mut self, repo_root: &Path) -> Result<usize> {
+        let tickets = jira::refresh_cache(repo_root)?;
+        let branches = git::list_branches(repo_root)?;
+        self.tickets = tickets;
+        self.existing_branches = branches.into_iter().collect();
+        self.show_overlay = true;
+        self.recompute_filters();
+        Ok(self.tickets.len())
+    }
+
+    fn clear_cache(&mut self, repo_root: &Path) -> Result<()> {
+        jira::invalidate_cache(repo_root)?;
+        self.tickets.clear();
+        self.filtered.clear();
+        self.selection = None;
+        self.show_overlay = false;
+        self.recompute_filters();
+        Ok(())
+    }
+
+    fn recompute_filters(&mut self) {
+        let trimmed = self.branch.trim();
+        self.branch_exists = !trimmed.is_empty() && self.existing_branches.contains(trimmed);
+        if trimmed.is_empty() {
+            self.filtered = (0..self.tickets.len()).collect();
+        } else {
+            let query = trimmed.to_lowercase();
+            self.filtered = self
+                .tickets
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, ticket)| {
+                    let key = ticket.key.to_lowercase();
+                    let summary = ticket.summary.to_lowercase();
+                    let slug = ticket.slug().to_lowercase();
+                    if key.contains(&query) || summary.contains(&query) || slug.contains(&query) {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        if self.filtered.is_empty() {
+            self.selection = None;
+        } else {
+            let idx = self.selection.unwrap_or(0).min(self.filtered.len() - 1);
+            self.selection = Some(idx);
+        }
+    }
+
+    fn branch_trimmed(&self) -> &str {
+        self.branch.trim()
     }
 
     fn branch_display(&self) -> &str {
@@ -802,9 +1011,83 @@ impl AddWorktreeState {
         }
     }
 
+    fn branch_exists(&self) -> bool {
+        self.branch_exists
+    }
+
     fn target_preview(&self, workspace_root: &Path) -> PathBuf {
-        let dir_name = branch_dir_name(&self.branch);
+        let dir_name = branch_dir_name(self.branch_trimmed());
         next_available_workspace_path(workspace_root, &dir_name)
+    }
+
+    fn overlay_visible(&self) -> bool {
+        self.show_overlay && !self.filtered.is_empty()
+    }
+
+    fn filtered_tickets(&self) -> impl Iterator<Item = &JiraTicket> {
+        self.filtered
+            .iter()
+            .filter_map(|&idx| self.tickets.get(idx))
+    }
+
+    fn selected_filtered_index(&self) -> Option<usize> {
+        self.selection
+    }
+
+    fn selected_ticket(&self) -> Option<&JiraTicket> {
+        self.selection
+            .and_then(|idx| self.filtered.get(idx))
+            .and_then(|&orig| self.tickets.get(orig))
+    }
+
+    fn move_selection_up(&mut self) {
+        if self.filtered.is_empty() {
+            self.selection = None;
+            return;
+        }
+        let len = self.filtered.len();
+        let current = self.selection.unwrap_or(0);
+        let next = if current == 0 { len - 1 } else { current - 1 };
+        self.selection = Some(next);
+    }
+
+    fn move_selection_down(&mut self) {
+        if self.filtered.is_empty() {
+            self.selection = None;
+            return;
+        }
+        let len = self.filtered.len();
+        let current = self.selection.unwrap_or(0);
+        self.selection = Some((current + 1) % len);
+    }
+
+    fn accept_selection(&mut self) -> bool {
+        if let Some(ticket) = self.selected_ticket() {
+            self.branch = ticket.slug();
+            self.show_overlay = false;
+            self.recompute_filters();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn backspace(&mut self) {
+        self.branch.pop();
+        self.recompute_filters();
+    }
+
+    fn push_char(&mut self, c: char) {
+        self.branch.push(c);
+        self.recompute_filters();
+    }
+
+    fn toggle_overlay(&mut self) {
+        if self.filtered.is_empty() {
+            self.show_overlay = false;
+        } else {
+            self.show_overlay = !self.show_overlay;
+        }
     }
 }
 

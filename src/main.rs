@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod git;
+mod jira;
 mod tui;
 mod wtm_paths;
 
