@@ -1,18 +1,4 @@
-node_modules/
-build/
-dist/
-release/
-test-results/
-tmp/
-coverage/
-nohup.out
-.idea/
-
-# Logs and temp files
-npm-debug.log*
-*.log
-
-# OS files
-.DS_Store
-Thumbs.db
-.wtm/
+/target
+.wtm/workspaces/*
+!.wtm/workspaces/.gitkeep
+.wtm/terminals.json
