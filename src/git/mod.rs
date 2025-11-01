@@ -47,6 +47,20 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
     parse_worktree_list(&output, repo_root)
 }
 
+/// List local branches using `git for-each-ref`.
+pub fn list_branches(repo_root: &Path) -> Result<Vec<String>> {
+    let output = run_git(
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        repo_root,
+    )?;
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect())
+}
+
 /// Create a new worktree by delegating to `git worktree add`.
 pub fn add_worktree(repo_root: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
     let mut args: Vec<String> = vec!["worktree".into(), "add".into()];
@@ -55,6 +69,17 @@ pub fn add_worktree(repo_root: &Path, path: &Path, branch: Option<&str>) -> Resu
         args.push(branch.to_string());
     }
     args.push(path.to_string_lossy().into_owned());
+    run_git(args, repo_root).map(|_| ())
+}
+
+/// Attach a new worktree to an existing branch without creating it.
+pub fn add_worktree_for_branch(repo_root: &Path, path: &Path, branch: &str) -> Result<()> {
+    let args = vec![
+        "worktree".into(),
+        "add".into(),
+        path.to_string_lossy().into_owned(),
+        branch.to_string(),
+    ];
     run_git(args, repo_root).map(|_| ())
 }
 
