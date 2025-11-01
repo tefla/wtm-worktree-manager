@@ -1,4 +1,4 @@
 /target
-.wtm/workspaces/*
+.wtm/
+!.wtm/workspaces/
 !.wtm/workspaces/.gitkeep
-.wtm/terminals.json
