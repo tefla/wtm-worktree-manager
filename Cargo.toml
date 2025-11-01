@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["git", "worktree", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 
+[features]
+default = ["fx"]
+fx = ["tachyonfx"]
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
@@ -21,6 +25,7 @@ serde_json = "1.0"
 tui-term = { version = "0.2", features = ["vt100"] }
 portable-pty = "0.9"
 sysinfo = "0.30"
+tachyonfx = { version = "0.11", optional = true, default-features = false, features = ["crossterm", "std-duration"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

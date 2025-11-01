@@ -1,5 +1,7 @@
 mod add_worktree;
 mod context;
+#[cfg(feature = "fx")]
+mod effects;
 mod input;
 mod ui;
 mod workspace;
@@ -8,6 +10,9 @@ use add_worktree::AddWorktreeState;
 use context::WorkspaceContext;
 use input::{handle_key, handle_mouse};
 use workspace::{QuickActionState, RemoveWorktreeState, WorkspaceState};
+
+#[cfg(feature = "fx")]
+use effects::FxController;
 
 use super::size::TerminalSize;
 use crate::{
@@ -55,6 +60,8 @@ pub(super) struct App {
     tab_regions: Vec<(u16, u16)>,
     context_panel_visible: bool,
     workspace_contexts: HashMap<PathBuf, WorkspaceContext>,
+    #[cfg(feature = "fx")]
+    fx: FxController,
 }
 
 impl App {
@@ -93,6 +100,8 @@ impl App {
             tab_regions: Vec::new(),
             context_panel_visible: false,
             workspace_contexts: HashMap::new(),
+            #[cfg(feature = "fx")]
+            fx: FxController::new(false),
         };
 
         if !app.workspaces.is_empty() {
@@ -103,6 +112,8 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame<'_>) {
+        #[cfg(feature = "fx")]
+        self.fx.begin_frame();
         ui::draw(self, frame);
     }
 
@@ -173,10 +184,14 @@ impl App {
 
     pub(super) fn set_status<S: Into<String>>(&mut self, message: S) {
         self.status_message = Some(message.into());
+        #[cfg(feature = "fx")]
+        self.fx.on_status_update();
     }
 
     pub(super) fn clear_status(&mut self) {
         self.status_message = None;
+        #[cfg(feature = "fx")]
+        self.fx.on_status_update();
     }
 
     pub(super) fn toggle_context_panel(&mut self) {
@@ -184,6 +199,9 @@ impl App {
         if self.context_panel_visible {
             self.refresh_context_for_selected();
         }
+        #[cfg(feature = "fx")]
+        self.fx
+            .on_context_visibility_change(self.context_panel_visible);
     }
 
     pub(super) fn refresh_context_for_selected(&mut self) {
@@ -207,5 +225,15 @@ impl App {
 
     pub(super) fn is_context_panel_visible(&self) -> bool {
         self.context_panel_visible
+    }
+
+    #[cfg(feature = "fx")]
+    pub(super) fn render_context_fx(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        self.fx.render_context(frame, area);
+    }
+
+    #[cfg(feature = "fx")]
+    pub(super) fn render_status_fx(&mut self, frame: &mut Frame<'_>, area: Rect) {
+        self.fx.render_status(frame, area);
     }
 }

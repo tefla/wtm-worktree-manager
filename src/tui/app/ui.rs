@@ -169,7 +169,7 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-fn draw_context_panel(app: &App, frame: &mut Frame<'_>, area: Rect) {
+fn draw_context_panel(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let header_style = Style::default()
         .fg(Color::Yellow)
@@ -221,6 +221,9 @@ fn draw_context_panel(app: &App, frame: &mut Frame<'_>, area: Rect) {
         .block(Block::default().title("Context").borders(Borders::ALL))
         .wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
+
+    #[cfg(feature = "fx")]
+    app.render_context_fx(frame, area);
 }
 
 fn draw_quick_actions(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
@@ -277,7 +280,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn draw_status(app: &App, frame: &mut Frame<'_>, area: Rect) {
+fn draw_status(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     let text = app
         .status_message
         .as_deref()
@@ -286,6 +289,9 @@ fn draw_status(app: &App, frame: &mut Frame<'_>, area: Rect) {
         Paragraph::new(text).style(Style::default().fg(Color::Gray)),
         area,
     );
+
+    #[cfg(feature = "fx")]
+    app.render_status_fx(frame, area);
 }
 
 fn render_add_worktree_overlay(frame: &mut Frame<'_>, area: Rect, state: &AddWorktreeState) {
