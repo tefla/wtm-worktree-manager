@@ -4,10 +4,7 @@ use std::time::Instant;
 
 use crossterm::style::Color as CtColor;
 use ratatui::{layout::Rect, Frame};
-use tachyonfx::{
-    fx,
-    Duration, Effect, EffectRenderer, Interpolation, Motion, Shader,
-};
+use tachyonfx::{fx, Duration, Effect, EffectRenderer, Interpolation, Motion, Shader};
 
 /// Controls ornamental effects rendered on top of the core TUI.
 pub(super) struct FxController {
@@ -32,9 +29,7 @@ impl FxController {
     /// Capture the duration since the previous frame so effects can advance smoothly.
     pub fn begin_frame(&mut self) {
         let now = Instant::now();
-        self.frame_delta = now
-            .saturating_duration_since(self.last_frame)
-            .into();
+        self.frame_delta = now.saturating_duration_since(self.last_frame).into();
         self.last_frame = now;
     }
 
@@ -94,10 +89,7 @@ fn context_intro_effect() -> Effect {
             context_backdrop(),
             (duration, Interpolation::CubicInOut),
         ),
-        fx::fade_from_fg(
-            context_accent(),
-            (duration, Interpolation::QuadOut),
-        ),
+        fx::fade_from_fg(context_accent(), (duration, Interpolation::QuadOut)),
     ])
 }
 

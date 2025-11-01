@@ -60,6 +60,14 @@ Running `wtm` with no arguments launches the TUI:
 - Embedded terminals are implemented via `portable-pty` and rendered with
   `tui-term` (`src/tui/pty_tab.rs`).
 
+### GUI (`src/gui`)
+
+- `run_gui` builds an `egui`/`eframe` application that lists worktrees,
+  launches quick actions, and wraps add/remove operations on top of the git
+  helpers.
+- The GUI reuses the same workspace bootstrapper as the TUI and performs git
+  actions synchronously on the UI thread (suitable for the current scope).
+
 ### Tests
 
 - Unit tests for parsing and state transitions live alongside their modules.

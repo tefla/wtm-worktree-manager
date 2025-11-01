@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod docker;
 mod git;
+mod gui;
 mod jira;
 mod tui;
 mod wtm_paths;
@@ -9,7 +10,8 @@ mod wtm_paths;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use commands::init::init_command;
-use git::{add_worktree, find_repo_root, list_worktrees, remove_worktree};
+use config::QuickAction;
+use git::{add_worktree, find_repo_root, list_worktrees, remove_worktree, WorktreeInfo};
 use std::path::PathBuf;
 use wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path};
 
@@ -38,6 +40,8 @@ enum Commands {
         #[command(subcommand)]
         command: WorktreeCommands,
     },
+    /// Launch the experimental desktop GUI
+    Gui,
 }
 
 #[derive(Subcommand, Debug)]
@@ -64,11 +68,28 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init { path }) => init_command(&path),
         Some(Commands::Worktree { command }) => run_worktree_cli(command),
+        Some(Commands::Gui) => run_gui_frontend(),
         None => run_dashboard(),
     }
 }
 
 fn run_dashboard() -> Result<()> {
+    let context = load_workspace_context()?;
+    tui::run_tui(context.repo_root, context.worktrees, context.quick_actions)
+}
+
+fn run_gui_frontend() -> Result<()> {
+    let context = load_workspace_context()?;
+    gui::run_gui(context.repo_root, context.worktrees, context.quick_actions)
+}
+
+struct WorkspaceContext {
+    repo_root: PathBuf,
+    worktrees: Vec<WorktreeInfo>,
+    quick_actions: Vec<QuickAction>,
+}
+
+fn load_workspace_context() -> Result<WorkspaceContext> {
     let cwd = std::env::current_dir().context("unable to determine current directory")?;
     let wtm_dir = cwd.join(".wtm");
     if !wtm_dir.exists() {
@@ -98,7 +119,11 @@ fn run_dashboard() -> Result<()> {
         }
     };
 
-    tui::run_tui(repo_root, worktrees, quick_actions)
+    Ok(WorkspaceContext {
+        repo_root,
+        worktrees,
+        quick_actions,
+    })
 }
 
 fn run_worktree_cli(command: WorktreeCommands) -> Result<()> {
