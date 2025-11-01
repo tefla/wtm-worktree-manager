@@ -1,6 +1,6 @@
 [package]
 name = "wtm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "CLI and TUI tooling for managing Git worktrees from a unified workspace."
 license = "MIT"
