@@ -4,7 +4,9 @@ use crate::{
     wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path},
 };
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+
+const SCROLL_LINES_PER_TICK: isize = 3;
 
 pub(super) fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.mode {
@@ -20,6 +22,25 @@ pub(super) fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             Ok(())
         }
     }
+}
+
+pub(super) fn handle_mouse(app: &mut App, event: MouseEvent) -> Result<()> {
+    if !matches!(app.mode, Mode::TerminalInput) {
+        return Ok(());
+    }
+    if let Some(workspace) = app.workspaces.get_mut(app.selected_workspace) {
+        if let Some(tab) = workspace.active_tab_mut() {
+            let delta = match event.kind {
+                MouseEventKind::ScrollUp => SCROLL_LINES_PER_TICK,
+                MouseEventKind::ScrollDown => -SCROLL_LINES_PER_TICK,
+                _ => 0,
+            };
+            if delta != 0 {
+                tab.scroll_scrollback(delta);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
