@@ -4,7 +4,7 @@ mod ui;
 mod workspace;
 
 use add_worktree::AddWorktreeState;
-use input::handle_key;
+use input::{handle_key, handle_mouse};
 use workspace::{QuickActionState, RemoveWorktreeState, WorkspaceState};
 
 use super::size::TerminalSize;
@@ -90,6 +90,7 @@ impl App {
             Event::Resize(width, height) => {
                 self.terminal_size = TerminalSize::new(height, width);
             }
+            Event::Mouse(mouse) => handle_mouse(self, mouse)?,
             _ => {}
         }
         Ok(())
