@@ -14,7 +14,7 @@ use tui_term::vt100;
 
 const DEFAULT_SCROLLBACK_LINES: usize = 5000;
 
-pub(super) struct PtyTab {
+pub(crate) struct PtyTab {
     base_title: String,
     title: Arc<RwLock<String>>,
     parser: Arc<RwLock<vt100::Parser>>,

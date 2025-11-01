@@ -65,6 +65,10 @@ Running `wtm` with no arguments launches the TUI:
 - `run_gui` builds an `egui`/`eframe` application that lists worktrees,
   launches quick actions, and wraps add/remove operations on top of the git
   helpers.
+- `GuiWorkspace` mirrors the TUI workspace manager and spawns `PtyTab` shells for
+  each worktree, enabling multiple PTY-backed tabs per workspace.
+- `forward_events_to_tab` captures egui keyboard/scroll events and feeds them
+  into the active terminal so the GUI stays interactive.
 - The GUI reuses the same workspace bootstrapper as the TUI and performs git
   actions synchronously on the UI thread (suitable for the current scope).
 
