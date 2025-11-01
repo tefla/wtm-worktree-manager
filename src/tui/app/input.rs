@@ -1,7 +1,7 @@
 use super::{add_worktree::AddWorktreeState, workspace::QuickActionState, App, Mode};
 use crate::{
     git,
-    wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path},
+    wtm_paths::{ensure_workspace_root, next_available_workspace_path},
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -53,6 +53,9 @@ pub(super) fn handle_mouse(app: &mut App, event: MouseEvent) -> Result<()> {
 
 fn handle_mouse_click(app: &mut App, column: u16, row: u16) -> Result<()> {
     if handle_sidebar_click(app, column, row)? {
+        if app.add_state.is_some() {
+            set_add_status(app, None);
+        }
         return Ok(());
     }
     if handle_tabs_click(app, column, row)? {
@@ -147,6 +150,18 @@ fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
         && row < rect.y + rect.height
 }
 
+fn set_add_status(app: &mut App, extra: Option<String>) {
+    if let Some(state) = app.add_state.as_ref() {
+        let mut status = state.status_line(&app.workspace_root);
+        if let Some(extra) = extra {
+            if !extra.is_empty() {
+                status = format!("{extra} | {status}");
+            }
+        }
+        app.set_status(status);
+    }
+}
+
 fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
@@ -199,11 +214,7 @@ fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
             Ok((state, warning)) => {
                 app.mode = Mode::Adding;
                 app.add_state = Some(state);
-                if let Some(message) = warning {
-                    app.set_status(message);
-                } else {
-                    app.clear_status();
-                }
+                set_add_status(app, warning);
             }
             Err(err) => {
                 app.set_status(format!("Failed to prepare add workflow: {err}"));
@@ -268,19 +279,22 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if let Some(state) = app.add_state.as_mut() {
                     if key.modifiers.contains(KeyModifiers::SHIFT) {
                         match state.clear_cache(&app.repo_root) {
-                            Ok(_) => app.set_status("Cleared Jira ticket cache."),
-                            Err(err) => {
-                                app.set_status(format!("Failed to clear Jira cache: {err}"))
-                            }
+                            Ok(_) => set_add_status(app, Some("Cleared Jira ticket cache.".into())),
+                            Err(err) => set_add_status(
+                                app,
+                                Some(format!("Failed to clear Jira cache: {err}")),
+                            ),
                         }
                     } else {
                         match state.refresh_data(&app.repo_root) {
-                            Ok(count) => {
-                                app.set_status(format!("Refreshed Jira tickets ({count})"))
-                            }
-                            Err(err) => {
-                                app.set_status(format!("Failed to refresh Jira tickets: {err}"))
-                            }
+                            Ok(count) => set_add_status(
+                                app,
+                                Some(format!("Refreshed Jira tickets ({count})")),
+                            ),
+                            Err(err) => set_add_status(
+                                app,
+                                Some(format!("Failed to refresh Jira tickets: {err}")),
+                            ),
                         }
                     }
                 }
@@ -289,6 +303,7 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
             KeyCode::Char(' ') => {
                 if let Some(state) = app.add_state.as_mut() {
                     state.toggle_overlay();
+                    set_add_status(app, None);
                 }
                 return Ok(());
             }
@@ -306,14 +321,14 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.mode = Mode::Navigation;
                 return Ok(());
             };
-            let branch_name = state.branch_trimmed().to_string();
+            let branch_name = state.normalized_branch();
             if branch_name.is_empty() {
-                app.set_status("Branch name is required.");
+                set_add_status(app, Some("Branch name is required.".into()));
                 app.add_state = Some(state);
                 return Ok(());
             }
             app.workspace_root = ensure_workspace_root(&app.repo_root)?;
-            let dir_name = branch_dir_name(&branch_name);
+            let dir_name = state.workspace_dir_name();
             let worktree_path = next_available_workspace_path(&app.workspace_root, &dir_name);
             let branch_exists = state.branch_exists();
             let branch_upstream = state.branch_upstream().map(str::to_owned);
@@ -368,13 +383,15 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Tab => {
             if let Some(state) = app.add_state.as_mut() {
                 if !state.accept_selection() {
-                    app.set_status("No suggestion selected.");
+                    set_add_status(app, Some("No suggestion selected.".into()));
                 }
+                set_add_status(app, None);
             }
         }
         KeyCode::Backspace => {
             if let Some(state) = app.add_state.as_mut() {
                 state.backspace();
+                set_add_status(app, None);
             }
         }
         KeyCode::Char(c) => {
@@ -384,6 +401,7 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
             {
                 if let Some(state) = app.add_state.as_mut() {
                     state.push_char(c);
+                    set_add_status(app, None);
                 }
             }
         }

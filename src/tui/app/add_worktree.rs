@@ -1,9 +1,13 @@
 use crate::{
     git,
     jira::{self, JiraTicket},
+    wtm_paths::{branch_dir_name, next_available_workspace_path},
 };
 use anyhow::Result;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone)]
 pub(super) enum Suggestion {
@@ -146,8 +150,48 @@ impl AddWorktreeState {
         self.branch.trim()
     }
 
+    pub(super) fn branch_display(&self) -> &str {
+        if self.branch.is_empty() {
+            "<branch>"
+        } else {
+            self.branch_trimmed()
+        }
+    }
+
     pub(super) fn branch_exists(&self) -> bool {
         self.branch_exists
+    }
+
+    pub(super) fn status_line(&self, workspace_root: &Path) -> String {
+        let branch = self.branch_display();
+        let target = self.target_preview(workspace_root);
+        let mut status = format!("[ADD] Branch: {branch} ⇒ {}", target.display());
+        if self.branch_exists() {
+            status.push_str(" • existing branch");
+        } else if self.branch_trimmed().is_empty() {
+            status.push_str(" • enter a branch name");
+        }
+        if let Some(upstream) = self.branch_upstream() {
+            status.push_str(&format!(" • upstream: {upstream}"));
+        }
+        status.push_str(" • Enter: confirm • Esc: cancel • Tab: insert suggestion");
+        status
+    }
+
+    pub(super) fn normalized_branch(&self) -> String {
+        if self.branch_exists {
+            self.branch_trimmed().to_string()
+        } else {
+            branch_dir_name(self.branch_trimmed())
+        }
+    }
+
+    pub(super) fn workspace_dir_name(&self) -> String {
+        branch_dir_name(self.branch_trimmed())
+    }
+
+    pub(super) fn target_preview(&self, workspace_root: &Path) -> PathBuf {
+        next_available_workspace_path(workspace_root, &self.workspace_dir_name())
     }
 
     pub(super) fn overlay_visible(&self) -> bool {
@@ -193,7 +237,7 @@ impl AddWorktreeState {
                     Suggestion::LocalBranch(branch) => (branch.clone(), None),
                     Suggestion::RemoteBranch {
                         branch, upstream, ..
-                    } => (branch.clone(), Some(upstream.clone())),
+                    } => (branch_dir_name(branch), Some(upstream.clone())),
                 })
         else {
             return false;
@@ -215,6 +259,7 @@ impl AddWorktreeState {
     pub(super) fn push_char(&mut self, c: char) {
         self.branch_upstream = None;
         self.branch.push(c);
+        self.branch = sanitize_branch_input(&self.branch);
         self.recompute_filters();
     }
 
@@ -352,7 +397,7 @@ mod tests {
         let mut state = sample_state();
         state.selection = Some(2);
         assert!(state.accept_selection());
-        assert_eq!(state.branch_trimmed(), "feature/widget");
+        assert_eq!(state.branch_trimmed(), "feature-widget");
         assert_eq!(state.branch_upstream(), Some("origin/feature/widget"));
     }
 
@@ -374,7 +419,7 @@ mod tests {
         assert_eq!(state.filtered_suggestions().count(), 1);
         state.selection = Some(0);
         assert!(state.accept_selection());
-        assert_eq!(state.branch_trimmed(), "feature/widget");
+        assert_eq!(state.branch_trimmed(), "feature-widget");
     }
 
     #[test]
@@ -418,4 +463,17 @@ mod tests {
         state.recompute_filters();
         assert!(state.branch_exists());
     }
+}
+fn sanitize_branch_input(value: &str) -> String {
+    let mut slug: String = value
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
+            _ => '-',
+        })
+        .collect();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
 }
