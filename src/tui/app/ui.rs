@@ -185,9 +185,7 @@ fn draw_status(app: &App, frame: &mut Frame<'_>, area: Rect) {
         .as_deref()
         .unwrap_or("q: quit • a: add • p: prune • ?: help");
     frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(Color::Gray))
-            .block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(text).style(Style::default().fg(Color::Gray)),
         area,
     );
 }
