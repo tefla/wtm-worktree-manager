@@ -15,7 +15,7 @@ use crate::{
 };
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind};
-use ratatui::Frame;
+use ratatui::{layout::Rect, Frame};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -46,6 +46,10 @@ pub(super) struct App {
     terminal_size: TerminalSize,
     terminal_view_size: Option<TerminalSize>,
     status_message: Option<String>,
+    sidebar_area: Option<Rect>,
+    tabs_area: Option<Rect>,
+    terminal_area: Option<Rect>,
+    tab_regions: Vec<(u16, u16)>,
 }
 
 impl App {
@@ -77,6 +81,10 @@ impl App {
             terminal_size: size,
             terminal_view_size: None,
             status_message: None,
+            sidebar_area: None,
+            tabs_area: None,
+            terminal_area: None,
+            tab_regions: Vec::new(),
         })
     }
 

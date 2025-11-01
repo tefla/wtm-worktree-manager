@@ -4,7 +4,8 @@ use crate::{
     wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path},
 };
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 
 const SCROLL_LINES_PER_TICK: isize = 3;
 
@@ -25,22 +26,125 @@ pub(super) fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 pub(super) fn handle_mouse(app: &mut App, event: MouseEvent) -> Result<()> {
-    if !matches!(app.mode, Mode::TerminalInput) {
+    match event.kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            if matches!(app.mode, Mode::TerminalInput) {
+                if let Some(workspace) = app.workspaces.get_mut(app.selected_workspace) {
+                    if let Some(tab) = workspace.active_tab_mut() {
+                        let delta = match event.kind {
+                            MouseEventKind::ScrollUp => SCROLL_LINES_PER_TICK,
+                            MouseEventKind::ScrollDown => -SCROLL_LINES_PER_TICK,
+                            _ => 0,
+                        };
+                        if delta != 0 {
+                            tab.scroll_scrollback(delta);
+                        }
+                    }
+                }
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            handle_mouse_click(app, event.column, event.row)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_mouse_click(app: &mut App, column: u16, row: u16) -> Result<()> {
+    if handle_sidebar_click(app, column, row)? {
         return Ok(());
     }
-    if let Some(workspace) = app.workspaces.get_mut(app.selected_workspace) {
-        if let Some(tab) = workspace.active_tab_mut() {
-            let delta = match event.kind {
-                MouseEventKind::ScrollUp => SCROLL_LINES_PER_TICK,
-                MouseEventKind::ScrollDown => -SCROLL_LINES_PER_TICK,
-                _ => 0,
-            };
-            if delta != 0 {
-                tab.scroll_scrollback(delta);
+    if handle_tabs_click(app, column, row)? {
+        return Ok(());
+    }
+    if handle_terminal_click(app, column, row)? {
+        return Ok(());
+    }
+    Ok(())
+}
+
+fn handle_sidebar_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.sidebar_area else {
+        return Ok(false);
+    };
+    if app.workspaces.is_empty() || area.width <= 2 || area.height <= 2 {
+        return Ok(false);
+    }
+    let inner = inner_rect(area);
+    if !point_in_rect(inner, column, row) {
+        return Ok(false);
+    }
+    let index = (row - inner.y) as usize;
+    if index < app.workspaces.len() {
+        app.selected_workspace = index;
+        app.mode = Mode::Navigation;
+        app.clear_status();
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn handle_tabs_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.tabs_area else {
+        return Ok(false);
+    };
+    if app.tab_regions.is_empty() {
+        return Ok(false);
+    }
+    let inner = inner_rect(area);
+    if row != inner.y {
+        return Ok(false);
+    }
+    if column < inner.x || column >= inner.x + inner.width {
+        return Ok(false);
+    }
+    for (idx, (start, end)) in app.tab_regions.iter().enumerate() {
+        if column >= *start && column < *end {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                ws.set_active_tab(idx);
+                app.mode = Mode::Navigation;
+                app.clear_status();
+                return Ok(true);
             }
         }
     }
-    Ok(())
+    Ok(false)
+}
+
+fn handle_terminal_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.terminal_area else {
+        return Ok(false);
+    };
+    let inner = inner_rect(area);
+    if point_in_rect(inner, column, row) {
+        if let Some(ws) = app.workspaces.get(app.selected_workspace) {
+            if ws.has_tabs() {
+                app.mode = Mode::TerminalInput;
+                app.clear_status();
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn inner_rect(rect: Rect) -> Rect {
+    Rect {
+        x: rect.x.saturating_add(1),
+        y: rect.y.saturating_add(1),
+        width: rect.width.saturating_sub(2),
+        height: rect.height.saturating_sub(2),
+    }
+}
+
+fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && column >= rect.x
+        && column < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
 }
 
 fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {

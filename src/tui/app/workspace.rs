@@ -56,12 +56,22 @@ impl WorkspaceState {
             .collect()
     }
 
+    pub(super) fn tabs_len(&self) -> usize {
+        self.tabs.len()
+    }
+
     pub(super) fn active_tab_index(&self) -> usize {
         self.active_tab
     }
 
     pub(super) fn active_tab_mut(&mut self) -> Option<&mut PtyTab> {
         self.tabs.get_mut(self.active_tab)
+    }
+
+    pub(super) fn set_active_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active_tab = index;
+        }
     }
 
     pub(super) fn has_tabs(&self) -> bool {

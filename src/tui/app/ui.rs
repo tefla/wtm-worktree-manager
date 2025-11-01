@@ -25,7 +25,11 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         .constraints([Constraint::Length(26), Constraint::Min(10)])
         .split(root[0]);
 
+    app.sidebar_area = Some(body_chunks[0]);
     draw_sidebar(app, frame, body_chunks[0]);
+    app.tabs_area = None;
+    app.terminal_area = None;
+    app.tab_regions.clear();
     draw_main(app, frame, body_chunks[1]);
     if matches!(app.mode, Mode::Help) {
         draw_help_overlay(app, frame, root[0]);
@@ -77,7 +81,35 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(area);
 
+    app.tabs_area = Some(chunks[0]);
+    app.terminal_area = Some(chunks[1]);
+
     let titles: Vec<Line> = workspace.tab_titles().into_iter().map(Line::from).collect();
+
+    app.tab_regions.clear();
+    if let Some(tabs_rect) = app.tabs_area {
+        let inner_width = tabs_rect.width.saturating_sub(2);
+        let inner_x = tabs_rect.x.saturating_add(1);
+        let tab_count = workspace.tabs_len();
+        if inner_width > 0 && tab_count > 0 {
+            let tab_count_u16 = tab_count as u16;
+            let base = inner_width / tab_count_u16;
+            let mut remainder = inner_width % tab_count_u16;
+            let mut cursor = inner_x;
+            for _ in 0..tab_count {
+                let extra = if remainder > 0 {
+                    remainder -= 1;
+                    1
+                } else {
+                    0
+                };
+                let width = base + extra;
+                let span_end = (cursor.saturating_add(width.max(1))).min(inner_x + inner_width);
+                app.tab_regions.push((cursor, span_end));
+                cursor = span_end;
+            }
+        }
+    }
 
     let tabs = Tabs::new(titles)
         .block(
