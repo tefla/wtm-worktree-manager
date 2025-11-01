@@ -64,9 +64,22 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     Ok(terminal)
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+fn restore_terminal<W: io::Write>(terminal: &mut Terminal<CrosstermBackend<W>>) -> Result<()> {
     terminal.show_cursor().ok();
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     disable_raw_mode()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn restore_terminal_with_sink_backend_succeeds() {
+        let backend = CrosstermBackend::new(io::sink());
+        let mut terminal = Terminal::new(backend).expect("create terminal");
+        restore_terminal(&mut terminal).expect("restore terminal");
+    }
 }

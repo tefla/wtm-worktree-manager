@@ -10,6 +10,9 @@ use std::{
 use crate::wtm_paths::branch_dir_name;
 
 const CACHE_FILE: &str = "jira_cache.json";
+const DEFAULT_JQL: &str = "assignee = currentUser() AND statusCategory != Done";
+const DEFAULT_FIELDS: &str = "key,summary";
+const DEFAULT_LIMIT: &str = "200";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraTicket {
@@ -95,13 +98,49 @@ fn cache_path(repo_root: &Path) -> PathBuf {
 }
 
 fn fetch_tickets() -> Result<Vec<JiraTicket>> {
+    fetch_tickets_new_cli().or_else(|primary_err| {
+        fetch_tickets_legacy_cli().map_err(|legacy_err| {
+            anyhow!(
+                "failed to fetch Jira tickets via acli: {primary_err} (legacy fallback error: {legacy_err})"
+            )
+        })
+    })
+}
+
+fn fetch_tickets_new_cli() -> Result<Vec<JiraTicket>> {
+    let output = Command::new("acli")
+        .args([
+            "jira",
+            "workitem",
+            "search",
+            "--jql",
+            DEFAULT_JQL,
+            "--fields",
+            DEFAULT_FIELDS,
+            "--limit",
+            DEFAULT_LIMIT,
+            "--json",
+        ])
+        .output()
+        .context("failed to execute acli workitem search for Jira tickets")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "acli workitem search command failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_acli_output(stdout.trim())
+}
+
+fn fetch_tickets_legacy_cli() -> Result<Vec<JiraTicket>> {
     let output = Command::new("acli")
         .args(["jira", "issues", "--format", "json"])
         .output()
-        .context("failed to execute acli for Jira tickets")?;
+        .context("failed to execute legacy acli issues command for Jira tickets")?;
     if !output.status.success() {
         return Err(anyhow!(
-            "acli command failed: {}",
+            "legacy acli issues command failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
@@ -158,4 +197,56 @@ fn value_to_ticket(value: &Value) -> Option<JiraTicket> {
         key: key.to_string(),
         summary: summary.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_acli_output_handles_json_array() {
+        let output = r#"[
+            {"key":"ABC-1","summary":"Build automation"},
+            {"key":"ABC-2","summary":"Write docs"}
+        ]"#;
+        let tickets = parse_acli_output(output).unwrap();
+        assert_eq!(tickets.len(), 2);
+        assert_eq!(tickets[0].key, "ABC-1");
+        assert_eq!(tickets[0].summary, "Build automation");
+    }
+
+    #[test]
+    fn parse_acli_output_handles_nested_fields() {
+        let output = json!({
+            "issues": [
+                {
+                    "key": "ABC-3",
+                    "fields": {"summary": "Nested summary"}
+                }
+            ]
+        })
+        .to_string();
+        let tickets = parse_acli_output(&output).unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].key, "ABC-3");
+        assert_eq!(tickets[0].summary, "Nested summary");
+    }
+
+    #[test]
+    fn parse_acli_output_handles_plain_text() {
+        let output = "ABC-4 implement endpoint";
+        let tickets = parse_acli_output(output).unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].key, "ABC-4");
+        assert_eq!(tickets[0].summary, "implement endpoint");
+    }
+
+    #[test]
+    fn value_to_ticket_returns_empty_summary_when_missing() {
+        let value = json!({"key": "ABC-5"});
+        let ticket = value_to_ticket(&value).unwrap();
+        assert_eq!(ticket.key, "ABC-5");
+        assert_eq!(ticket.summary, "");
+    }
 }

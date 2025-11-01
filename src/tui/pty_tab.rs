@@ -220,9 +220,55 @@ pub fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{self, Write},
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Default, Clone)]
+    struct RecordingWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl RecordingWriter {
+        fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let writer = Self::default();
+            (writer.clone(), writer.buffer.clone())
+        }
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut guard = self.buffer.lock().unwrap();
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn default_shell_is_not_empty() {
         assert!(!default_shell().is_empty());
+    }
+
+    #[test]
+    fn respond_with_cursor_writes_position_sequence() {
+        let parser = Arc::new(RwLock::new(vt100::Parser::new(24, 80, 0)));
+        {
+            let mut guard = parser.write().unwrap();
+            guard.process(b"\x1b[10;20H");
+        }
+
+        let (writer_impl, buffer) = RecordingWriter::new();
+        let writer: Box<dyn Write + Send> = Box::new(writer_impl);
+        let writer = Arc::new(Mutex::new(writer));
+
+        respond_with_cursor(&parser, &writer);
+
+        let recorded = buffer.lock().unwrap().clone();
+        assert_eq!(recorded, b"\x1b[10;20R");
     }
 }

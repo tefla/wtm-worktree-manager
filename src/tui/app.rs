@@ -10,7 +10,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
     Frame,
 };
@@ -214,22 +214,71 @@ impl App {
                     frame.render_widget(Clear, overlay_area);
 
                     let items: Vec<ListItem> = state
-                        .filtered_tickets()
-                        .map(|ticket| {
-                            let slug = ticket.slug();
-                            let text = format!("{}  {}  [{}]", ticket.key, ticket.summary, slug);
-                            ListItem::new(Line::from(text))
+                        .filtered_suggestions()
+                        .map(|suggestion| match suggestion {
+                            Suggestion::Ticket(ticket) => {
+                                let slug = ticket.slug();
+                                ListItem::new(Line::from(vec![
+                                    Span::styled(
+                                        ticket.key.as_str(),
+                                        Style::default()
+                                            .fg(Color::Cyan)
+                                            .add_modifier(Modifier::BOLD),
+                                    ),
+                                    Span::raw("  "),
+                                    Span::raw(ticket.summary.as_str()),
+                                    Span::raw("  "),
+                                    Span::styled(
+                                        format!("[{slug}]"),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
+                                ]))
+                            }
+                            Suggestion::LocalBranch(branch) => ListItem::new(Line::from(vec![
+                                Span::styled(
+                                    "[local]",
+                                    Style::default()
+                                        .fg(Color::Green)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::raw("  "),
+                                Span::raw(branch.as_str()),
+                            ])),
+                            Suggestion::RemoteBranch { remote, branch, .. } => {
+                                ListItem::new(Line::from(vec![
+                                    Span::styled(
+                                        "[remote]",
+                                        Style::default()
+                                            .fg(Color::Magenta)
+                                            .add_modifier(Modifier::BOLD),
+                                    ),
+                                    Span::raw("  "),
+                                    Span::styled(
+                                        remote.as_str(),
+                                        Style::default().fg(Color::Magenta),
+                                    ),
+                                    Span::raw("  "),
+                                    Span::raw(branch.as_str()),
+                                ]))
+                            }
                         })
                         .collect();
 
                     let mut list_state = ListState::default();
                     list_state.select(state.selected_filtered_index());
 
-                    let list = List::new(items).block(
-                        Block::default()
-                            .title("Jira tickets (Tab: insert • Ctrl+R: refresh • Ctrl+Shift+R: clear)")
-                            .borders(Borders::ALL),
-                    );
+                    let list = List::new(items)
+                        .highlight_style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .highlight_symbol("▸ ")
+                        .block(
+                            Block::default()
+                                .title("Jira tickets (Tab: insert • Ctrl+R: refresh • Ctrl+Shift+R: clear)")
+                                .borders(Borders::ALL),
+                        );
 
                     frame.render_stateful_widget(list, overlay_area, &mut list_state);
                 }
@@ -555,11 +604,19 @@ impl App {
                 let dir_name = branch_dir_name(&branch_name);
                 let worktree_path = next_available_workspace_path(&self.workspace_root, &dir_name);
                 let branch_exists = state.branch_exists();
+                let branch_upstream = state.branch_upstream().map(str::to_owned);
                 let result = if branch_exists {
                     git::add_worktree_for_branch(
                         &self.repo_root,
                         &worktree_path,
                         branch_name.as_str(),
+                    )
+                } else if let Some(ref upstream) = branch_upstream {
+                    git::add_worktree_from_upstream(
+                        &self.repo_root,
+                        &worktree_path,
+                        branch_name.as_str(),
+                        upstream,
                     )
                 } else {
                     git::add_worktree(&self.repo_root, &worktree_path, Some(branch_name.as_str()))
@@ -899,15 +956,64 @@ impl WorkspaceState {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Suggestion {
+    Ticket(JiraTicket),
+    LocalBranch(String),
+    RemoteBranch {
+        remote: String,
+        branch: String,
+        upstream: String,
+    },
+}
+
+impl Suggestion {
+    fn matches(&self, query: &str) -> bool {
+        match self {
+            Suggestion::Ticket(ticket) => {
+                let key = ticket.key.to_lowercase();
+                let summary = ticket.summary.to_lowercase();
+                let slug = ticket.slug().to_lowercase();
+                key.contains(query) || summary.contains(query) || slug.contains(query)
+            }
+            Suggestion::LocalBranch(branch) => branch.to_lowercase().contains(query),
+            Suggestion::RemoteBranch {
+                remote,
+                branch,
+                upstream,
+            } => {
+                remote.to_lowercase().contains(query)
+                    || branch.to_lowercase().contains(query)
+                    || upstream.to_lowercase().contains(query)
+            }
+        }
+    }
+}
+
+fn split_remote_branch(reference: &str) -> Option<(String, String)> {
+    let mut parts = reference.splitn(2, '/');
+    let remote = parts.next().unwrap_or_default();
+    let branch = parts.next().unwrap_or("");
+    if branch.is_empty() {
+        None
+    } else {
+        Some((remote.to_string(), branch.to_string()))
+    }
+}
+
 #[derive(Debug)]
 struct AddWorktreeState {
     branch: String,
     tickets: Vec<JiraTicket>,
+    local_branches: Vec<String>,
+    remote_branches: Vec<String>,
+    suggestions: Vec<Suggestion>,
     filtered: Vec<usize>,
     selection: Option<usize>,
     show_overlay: bool,
     existing_branches: HashSet<String>,
     branch_exists: bool,
+    branch_upstream: Option<String>,
 }
 
 impl AddWorktreeState {
@@ -922,23 +1028,38 @@ impl AddWorktreeState {
             }
         };
 
-        let branches = match git::list_branches(repo_root) {
-            Ok(branches) => branches.into_iter().collect::<HashSet<_>>(),
+        let local_branches = match git::list_branches(repo_root) {
+            Ok(branches) => branches,
             Err(err) => {
                 warnings.push(format!("Failed to list git branches: {err}"));
-                HashSet::new()
+                Vec::new()
             }
         };
+
+        let remote_branches = match git::list_remote_branches(repo_root) {
+            Ok(branches) => branches,
+            Err(err) => {
+                warnings.push(format!("Failed to list remote branches: {err}"));
+                Vec::new()
+            }
+        };
+
+        let existing_branches = local_branches.iter().cloned().collect::<HashSet<_>>();
 
         let mut state = Self {
             branch: String::new(),
             tickets,
+            local_branches,
+            remote_branches,
+            suggestions: Vec::new(),
             filtered: Vec::new(),
             selection: None,
             show_overlay: true,
-            existing_branches: branches,
+            existing_branches,
             branch_exists: false,
+            branch_upstream: None,
         };
+        state.rebuild_suggestions();
         state.recompute_filters();
         let warning = if warnings.is_empty() {
             None
@@ -950,10 +1071,14 @@ impl AddWorktreeState {
 
     fn refresh_data(&mut self, repo_root: &Path) -> Result<usize> {
         let tickets = jira::refresh_cache(repo_root)?;
-        let branches = git::list_branches(repo_root)?;
+        let local_branches = git::list_branches(repo_root)?;
+        let remote_branches = git::list_remote_branches(repo_root)?;
         self.tickets = tickets;
-        self.existing_branches = branches.into_iter().collect();
+        self.local_branches = local_branches;
+        self.remote_branches = remote_branches;
+        self.existing_branches = self.local_branches.iter().cloned().collect();
         self.show_overlay = true;
+        self.rebuild_suggestions();
         self.recompute_filters();
         Ok(self.tickets.len())
     }
@@ -961,34 +1086,46 @@ impl AddWorktreeState {
     fn clear_cache(&mut self, repo_root: &Path) -> Result<()> {
         jira::invalidate_cache(repo_root)?;
         self.tickets.clear();
-        self.filtered.clear();
+        self.rebuild_suggestions();
         self.selection = None;
         self.show_overlay = false;
         self.recompute_filters();
         Ok(())
     }
 
+    fn rebuild_suggestions(&mut self) {
+        self.suggestions.clear();
+        self.suggestions
+            .extend(self.tickets.iter().cloned().map(Suggestion::Ticket));
+        self.suggestions.extend(
+            self.local_branches
+                .iter()
+                .cloned()
+                .map(Suggestion::LocalBranch),
+        );
+        for remote in &self.remote_branches {
+            if let Some((remote_name, branch_name)) = split_remote_branch(remote) {
+                self.suggestions.push(Suggestion::RemoteBranch {
+                    remote: remote_name,
+                    branch: branch_name,
+                    upstream: remote.clone(),
+                });
+            }
+        }
+    }
+
     fn recompute_filters(&mut self) {
         let trimmed = self.branch.trim();
         self.branch_exists = !trimmed.is_empty() && self.existing_branches.contains(trimmed);
         if trimmed.is_empty() {
-            self.filtered = (0..self.tickets.len()).collect();
+            self.filtered = (0..self.suggestions.len()).collect();
         } else {
             let query = trimmed.to_lowercase();
             self.filtered = self
-                .tickets
+                .suggestions
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, ticket)| {
-                    let key = ticket.key.to_lowercase();
-                    let summary = ticket.summary.to_lowercase();
-                    let slug = ticket.slug().to_lowercase();
-                    if key.contains(&query) || summary.contains(&query) || slug.contains(&query) {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|(idx, suggestion)| suggestion.matches(&query).then_some(idx))
                 .collect();
         }
         if self.filtered.is_empty() {
@@ -1024,20 +1161,20 @@ impl AddWorktreeState {
         self.show_overlay && !self.filtered.is_empty()
     }
 
-    fn filtered_tickets(&self) -> impl Iterator<Item = &JiraTicket> {
+    fn filtered_suggestions(&self) -> impl Iterator<Item = &Suggestion> {
         self.filtered
             .iter()
-            .filter_map(|&idx| self.tickets.get(idx))
+            .filter_map(|&idx| self.suggestions.get(idx))
     }
 
     fn selected_filtered_index(&self) -> Option<usize> {
         self.selection
     }
 
-    fn selected_ticket(&self) -> Option<&JiraTicket> {
+    fn selected_suggestion(&self) -> Option<&Suggestion> {
         self.selection
             .and_then(|idx| self.filtered.get(idx))
-            .and_then(|&orig| self.tickets.get(orig))
+            .and_then(|&orig| self.suggestions.get(orig))
     }
 
     fn move_selection_up(&mut self) {
@@ -1062,22 +1199,34 @@ impl AddWorktreeState {
     }
 
     fn accept_selection(&mut self) -> bool {
-        if let Some(ticket) = self.selected_ticket() {
-            self.branch = ticket.slug();
-            self.show_overlay = false;
-            self.recompute_filters();
-            true
-        } else {
-            false
-        }
+        let Some((branch, upstream)) =
+            self.selected_suggestion()
+                .map(|suggestion| match suggestion {
+                    Suggestion::Ticket(ticket) => (ticket.slug(), None),
+                    Suggestion::LocalBranch(branch) => (branch.clone(), None),
+                    Suggestion::RemoteBranch {
+                        branch, upstream, ..
+                    } => (branch.clone(), Some(upstream.clone())),
+                })
+        else {
+            return false;
+        };
+
+        self.branch = branch;
+        self.branch_upstream = upstream;
+        self.show_overlay = false;
+        self.recompute_filters();
+        true
     }
 
     fn backspace(&mut self) {
+        self.branch_upstream = None;
         self.branch.pop();
         self.recompute_filters();
     }
 
     fn push_char(&mut self, c: char) {
+        self.branch_upstream = None;
         self.branch.push(c);
         self.recompute_filters();
     }
@@ -1088,6 +1237,10 @@ impl AddWorktreeState {
         } else {
             self.show_overlay = !self.show_overlay;
         }
+    }
+
+    fn branch_upstream(&self) -> Option<&str> {
+        self.branch_upstream.as_deref()
     }
 }
 
@@ -1136,5 +1289,162 @@ impl RemoveWorktreeState {
             target: target.to_path_buf(),
             force: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wtm_paths::branch_dir_name;
+    use std::collections::HashSet;
+
+    fn sample_state() -> AddWorktreeState {
+        let tickets = vec![JiraTicket {
+            key: "PROJ-1".into(),
+            summary: "Implement feature".into(),
+        }];
+        let local_branches = vec!["feature/local".into()];
+        let remote_branches = vec!["origin/feature/widget".into()];
+        let existing_branches = local_branches.iter().cloned().collect::<HashSet<_>>();
+
+        let mut state = AddWorktreeState {
+            branch: String::new(),
+            tickets,
+            local_branches,
+            remote_branches,
+            suggestions: Vec::new(),
+            filtered: Vec::new(),
+            selection: None,
+            show_overlay: true,
+            existing_branches,
+            branch_exists: false,
+            branch_upstream: None,
+        };
+        state.rebuild_suggestions();
+        state.recompute_filters();
+        state
+    }
+
+    #[test]
+    fn split_remote_branch_extracts_remote_and_branch() {
+        let result = split_remote_branch("origin/feature/foo");
+        assert_eq!(result, Some(("origin".into(), "feature/foo".into())));
+    }
+
+    #[test]
+    fn split_remote_branch_returns_none_without_branch() {
+        assert_eq!(split_remote_branch("origin"), None);
+        assert_eq!(split_remote_branch("origin/"), None);
+    }
+
+    #[test]
+    fn suggestion_matches_ticket_fields() {
+        let ticket = JiraTicket {
+            key: "ABC-42".into(),
+            summary: "Improve performance".into(),
+        };
+        let suggestion = Suggestion::Ticket(ticket);
+        assert!(suggestion.matches("abc"));
+        assert!(suggestion.matches("performance"));
+    }
+
+    #[test]
+    fn suggestion_matches_remote_branch_components() {
+        let suggestion = Suggestion::RemoteBranch {
+            remote: "origin".into(),
+            branch: "feature/widget".into(),
+            upstream: "origin/feature/widget".into(),
+        };
+        assert!(suggestion.matches("origin"));
+        assert!(suggestion.matches("widget"));
+        assert!(suggestion.matches("origin/feature"));
+    }
+
+    #[test]
+    fn accept_selection_for_remote_branch_sets_upstream() {
+        let mut state = sample_state();
+        // suggestions: [ticket, local branch, remote branch]
+        state.selection = Some(2);
+        assert!(state.accept_selection());
+        assert_eq!(state.branch_trimmed(), "feature/widget");
+        assert_eq!(state.branch_upstream(), Some("origin/feature/widget"));
+    }
+
+    #[test]
+    fn accept_selection_for_ticket_generates_slug() {
+        let mut state = sample_state();
+        state.selection = Some(0);
+        assert!(state.accept_selection());
+        let expected = branch_dir_name("PROJ-1 Implement feature");
+        assert_eq!(state.branch_trimmed(), expected);
+        assert_eq!(state.branch_upstream(), None);
+    }
+
+    #[test]
+    fn recompute_filters_filters_by_query() {
+        let mut state = sample_state();
+        state.branch = "widget".into();
+        state.recompute_filters();
+        // only the remote branch contains "widget"
+        assert_eq!(state.filtered.len(), 1);
+        state.selection = Some(0);
+        assert!(state.accept_selection());
+        assert_eq!(state.branch_trimmed(), "feature/widget");
+    }
+
+    #[test]
+    fn toggle_overlay_disables_when_no_results() {
+        let mut state = sample_state();
+        state.suggestions.clear();
+        state.filtered.clear();
+        state.show_overlay = true;
+        state.toggle_overlay();
+        assert!(!state.overlay_visible());
+    }
+
+    #[test]
+    fn backspace_clears_branch_upstream() {
+        let mut state = sample_state();
+        state.selection = Some(2);
+        assert!(state.accept_selection());
+        assert!(state.branch_upstream().is_some());
+        state.backspace();
+        assert!(state.branch_upstream().is_none());
+    }
+
+    #[test]
+    fn move_selection_wraps_around() {
+        let mut state = sample_state();
+        // Extend suggestions so we have multiple entries to cycle through.
+        state
+            .suggestions
+            .push(Suggestion::LocalBranch("feature/extra".into()));
+        state.filtered = vec![0, 1, 2, 3];
+        state.selection = Some(3);
+        state.move_selection_down();
+        assert_eq!(state.selected_filtered_index(), Some(0));
+        state.move_selection_up();
+        assert_eq!(state.selected_filtered_index(), Some(3));
+    }
+
+    #[test]
+    fn branch_exists_detects_local_match() {
+        let mut state = sample_state();
+        state.branch = "feature/local".into();
+        state.recompute_filters();
+        assert!(state.branch_exists());
+    }
+
+    #[test]
+    fn quick_action_state_wraps_navigation() {
+        let mut state = QuickActionState::default();
+        state.selected = 0;
+        state.move_up(5);
+        assert_eq!(state.selected, 4);
+        state.move_down(5);
+        assert_eq!(state.selected, 0);
+        state.selected = 10;
+        state.clamp(3);
+        assert_eq!(state.selected, 2);
     }
 }
