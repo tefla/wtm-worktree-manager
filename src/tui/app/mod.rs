@@ -1,9 +1,11 @@
 mod add_worktree;
+mod context;
 mod input;
 mod ui;
 mod workspace;
 
 use add_worktree::AddWorktreeState;
+use context::WorkspaceContext;
 use input::{handle_key, handle_mouse};
 use workspace::{QuickActionState, RemoveWorktreeState, WorkspaceState};
 
@@ -47,9 +49,12 @@ pub(super) struct App {
     terminal_view_size: Option<TerminalSize>,
     status_message: Option<String>,
     sidebar_area: Option<Rect>,
+    context_area: Option<Rect>,
     tabs_area: Option<Rect>,
     terminal_area: Option<Rect>,
     tab_regions: Vec<(u16, u16)>,
+    context_panel_visible: bool,
+    workspace_contexts: HashMap<PathBuf, WorkspaceContext>,
 }
 
 impl App {
@@ -66,7 +71,7 @@ impl App {
             workspace_states.push(WorkspaceState::new(info, size, &mut next_tab_id)?);
         }
 
-        Ok(Self {
+        let mut app = Self {
             repo_root,
             workspace_root,
             workspaces: workspace_states,
@@ -82,10 +87,19 @@ impl App {
             terminal_view_size: None,
             status_message: None,
             sidebar_area: None,
+            context_area: None,
             tabs_area: None,
             terminal_area: None,
             tab_regions: Vec::new(),
-        })
+            context_panel_visible: false,
+            workspace_contexts: HashMap::new(),
+        };
+
+        if !app.workspaces.is_empty() {
+            app.refresh_context_for_selected();
+        }
+
+        Ok(app)
     }
 
     pub fn draw(&mut self, frame: &mut Frame<'_>) {
@@ -139,10 +153,16 @@ impl App {
         }
 
         self.workspaces = rebuilt;
+        self.workspace_contexts
+            .retain(|path, _| self.workspaces.iter().any(|ws| ws.path() == path));
         if self.workspaces.is_empty() {
             self.selected_workspace = 0;
+            self.workspace_contexts.clear();
         } else if self.selected_workspace >= self.workspaces.len() {
             self.selected_workspace = self.workspaces.len() - 1;
+            self.refresh_context_for_selected();
+        } else {
+            self.refresh_context_for_selected();
         }
         Ok(())
     }
@@ -157,5 +177,35 @@ impl App {
 
     pub(super) fn clear_status(&mut self) {
         self.status_message = None;
+    }
+
+    pub(super) fn toggle_context_panel(&mut self) {
+        self.context_panel_visible = !self.context_panel_visible;
+        if self.context_panel_visible {
+            self.refresh_context_for_selected();
+        }
+    }
+
+    pub(super) fn refresh_context_for_selected(&mut self) {
+        if let Some(workspace) = self.workspaces.get(self.selected_workspace) {
+            let info = workspace.info().clone();
+            let context = context::gather_workspace_context(&info);
+            self.workspace_contexts
+                .insert(workspace.path().to_path_buf(), context);
+        }
+    }
+
+    pub(super) fn set_selected_workspace(&mut self, index: usize) {
+        if self.workspaces.is_empty() || index >= self.workspaces.len() {
+            return;
+        }
+        if self.selected_workspace != index {
+            self.selected_workspace = index;
+            self.refresh_context_for_selected();
+        }
+    }
+
+    pub(super) fn is_context_panel_visible(&self) -> bool {
+        self.context_panel_visible
     }
 }

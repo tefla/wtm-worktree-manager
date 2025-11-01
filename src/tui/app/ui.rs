@@ -20,17 +20,29 @@ pub(super) fn draw(app: &mut App, frame: &mut Frame<'_>) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
+    let mut body_constraints = vec![Constraint::Length(26), Constraint::Min(10)];
+    if app.is_context_panel_visible() {
+        body_constraints.push(Constraint::Length(32));
+    }
+
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(26), Constraint::Min(10)])
+        .constraints(body_constraints)
         .split(root[0]);
 
     app.sidebar_area = Some(body_chunks[0]);
     draw_sidebar(app, frame, body_chunks[0]);
     app.tabs_area = None;
     app.terminal_area = None;
+    app.context_area = None;
     app.tab_regions.clear();
     draw_main(app, frame, body_chunks[1]);
+    if app.is_context_panel_visible() {
+        if let Some(area) = body_chunks.get(2).copied() {
+            app.context_area = Some(area);
+            draw_context_panel(app, frame, area);
+        }
+    }
     if matches!(app.mode, Mode::Help) {
         draw_help_overlay(app, frame, root[0]);
     }
@@ -157,6 +169,60 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
+fn draw_context_panel(app: &App, frame: &mut Frame<'_>, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    let header_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    let content = app
+        .workspaces
+        .get(app.selected_workspace)
+        .and_then(|workspace| app.workspace_contexts.get(workspace.path()));
+
+    if let Some(context) = content {
+        if !context.git.is_empty() {
+            lines.push(Line::from(Span::styled("Git", header_style)));
+            for entry in &context.git {
+                lines.push(Line::from(format!("  {entry}")));
+            }
+        }
+
+        if !context.docker.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled("Docker", header_style)));
+            for entry in &context.docker {
+                lines.push(Line::from(format!("  {entry}")));
+            }
+        }
+
+        if !context.errors.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled("Warnings", header_style)));
+            for entry in &context.errors {
+                lines.push(Line::from(format!("  {entry}")));
+            }
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from("No context information available."));
+        }
+    } else if app.workspaces.is_empty() {
+        lines.push(Line::from("No worktree selected."));
+    } else {
+        lines.push(Line::from("Context not loaded. Press `i` to refresh."));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().title("Context").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
 fn draw_quick_actions(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     if app.quick_actions.is_empty() {
         frame.render_widget(
@@ -215,7 +281,7 @@ fn draw_status(app: &App, frame: &mut Frame<'_>, area: Rect) {
     let text = app
         .status_message
         .as_deref()
-        .unwrap_or("q: quit • a: add • p: prune • ?: help");
+        .unwrap_or("q: quit • a: add • p: prune • i: context • ?: help");
     frame.render_widget(
         Paragraph::new(text).style(Style::default().fg(Color::Gray)),
         area,
@@ -293,6 +359,7 @@ fn help_text(app: &App) -> String {
         "  Enter: focus terminal".into(),
         "  n: new tab".into(),
         "  x: close tab".into(),
+        "  i: toggle context panel".into(),
         "  a: add worktree".into(),
         "  p: prune worktree".into(),
         "  c: quick actions".into(),

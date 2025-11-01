@@ -80,7 +80,7 @@ fn handle_sidebar_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
     }
     let index = (row - inner.y) as usize;
     if index < app.workspaces.len() {
-        app.selected_workspace = index;
+        app.set_selected_workspace(index);
         app.mode = Mode::Navigation;
         app.clear_status();
         return Ok(true);
@@ -167,16 +167,20 @@ fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Up => {
             if !app.workspaces.is_empty() {
-                if app.selected_workspace == 0 {
-                    app.selected_workspace = app.workspaces.len() - 1;
+                let len = app.workspaces.len();
+                let new_index = if app.selected_workspace == 0 {
+                    len - 1
                 } else {
-                    app.selected_workspace -= 1;
-                }
+                    app.selected_workspace - 1
+                };
+                app.set_selected_workspace(new_index);
             }
         }
         KeyCode::Down => {
             if !app.workspaces.is_empty() {
-                app.selected_workspace = (app.selected_workspace + 1) % app.workspaces.len();
+                let len = app.workspaces.len();
+                let new_index = (app.selected_workspace + 1) % len;
+                app.set_selected_workspace(new_index);
             }
         }
         KeyCode::Left => {
@@ -201,6 +205,9 @@ fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 ws.close_active_tab()?;
                 app.clear_status();
             }
+        }
+        KeyCode::Char('i') => {
+            app.toggle_context_panel();
         }
         KeyCode::Enter => {
             if let Some(ws) = app.workspaces.get(app.selected_workspace) {
@@ -361,7 +368,7 @@ fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     }
                     app.refresh_worktrees()?;
                     if let Some(idx) = app.index_of_path(&worktree_path) {
-                        app.selected_workspace = idx;
+                        app.set_selected_workspace(idx);
                     }
                 }
                 Err(err) => {

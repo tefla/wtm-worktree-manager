@@ -1,5 +1,7 @@
 //! Git helpers that leverage the `git worktree` command line interface.
 
+pub mod status;
+
 use anyhow::{anyhow, Context, Result};
 use std::{
     collections::HashMap,
@@ -126,7 +128,7 @@ pub fn remove_worktree(repo_root: &Path, path: &Path, force: bool) -> Result<()>
     run_git(args, repo_root).map(|_| ())
 }
 
-fn run_git<I, S>(args: I, dir: &Path) -> Result<String>
+pub(super) fn run_git<I, S>(args: I, dir: &Path) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,

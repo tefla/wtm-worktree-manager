@@ -49,6 +49,10 @@ impl WorkspaceState {
         self.info.path.display().to_string()
     }
 
+    pub(super) fn info(&self) -> &WorktreeInfo {
+        &self.info
+    }
+
     pub(super) fn tab_titles(&self) -> Vec<String> {
         self.tabs
             .iter()

@@ -46,7 +46,7 @@ Running `wtm` with no arguments launches the TUI:
 
 - `run_tui` configures the Crossterm backend and drives the event loop.
 - `App` (in `src/tui/app/mod.rs`) holds all mutable UI state: workspaces, tabs,
-  quick actions, active mode, and status messages.
+  quick actions, active mode, the optional context panel, and status messages.
 - Rendering and user interaction is split across four modules:
   - `app/ui.rs` — draws the sidebar, terminal panes, overlays, and status bar.
   - `app/input.rs` — keyboard handling for navigation, terminal input, add/remove
@@ -55,6 +55,8 @@ Running `wtm` with no arguments launches the TUI:
     state.
   - `app/add_worktree.rs` — suggestion engine that merges Jira tickets, local
     branches, and remote branches into a searchable list.
+- `app/context.rs` enriches the optional context panel with git status and
+  Docker compose metadata gathered per workspace.
 - Embedded terminals are implemented via `portable-pty` and rendered with
   `tui-term` (`src/tui/pty_tab.rs`).
 
@@ -84,3 +86,6 @@ Running `wtm` with no arguments launches the TUI:
   new suggestion providers (e.g. pull requests, issue trackers).
 - **UI widgets:** add new draw helpers under `app/ui.rs` and update the layout to
   incorporate them.
+- **Workspace context:** press `i` to toggle the context panel, which displays
+  git status information alongside docker compose containers discovered in the
+  selected worktree.
