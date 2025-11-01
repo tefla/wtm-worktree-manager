@@ -1,0 +1,490 @@
+use super::{add_worktree::AddWorktreeState, workspace::QuickActionState, App, Mode};
+use crate::{
+    git,
+    wtm_paths::{ensure_workspace_root, next_available_workspace_path},
+};
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+
+const SCROLL_LINES_PER_TICK: isize = 3;
+
+pub(super) fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match app.mode {
+        Mode::Navigation => handle_navigation_key(app, key),
+        Mode::TerminalInput => handle_terminal_key(app, key),
+        Mode::Adding => handle_add_worktree_key(app, key),
+        Mode::Removing => handle_remove_worktree_key(app, key),
+        Mode::QuickActions => handle_quick_actions_key(app, key),
+        Mode::Help => {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+                app.mode = Mode::Navigation;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) fn handle_mouse(app: &mut App, event: MouseEvent) -> Result<()> {
+    match event.kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            if matches!(app.mode, Mode::TerminalInput) {
+                if let Some(workspace) = app.workspaces.get_mut(app.selected_workspace) {
+                    if let Some(tab) = workspace.active_tab_mut() {
+                        let delta = match event.kind {
+                            MouseEventKind::ScrollUp => SCROLL_LINES_PER_TICK,
+                            MouseEventKind::ScrollDown => -SCROLL_LINES_PER_TICK,
+                            _ => 0,
+                        };
+                        if delta != 0 {
+                            tab.scroll_scrollback(delta);
+                        }
+                    }
+                }
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            handle_mouse_click(app, event.column, event.row)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_mouse_click(app: &mut App, column: u16, row: u16) -> Result<()> {
+    if handle_sidebar_click(app, column, row)? {
+        if app.add_state.is_some() {
+            set_add_status(app, None);
+        }
+        return Ok(());
+    }
+    if handle_tabs_click(app, column, row)? {
+        return Ok(());
+    }
+    if handle_terminal_click(app, column, row)? {
+        return Ok(());
+    }
+    Ok(())
+}
+
+fn handle_sidebar_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.sidebar_area else {
+        return Ok(false);
+    };
+    if app.workspaces.is_empty() || area.width <= 2 || area.height <= 2 {
+        return Ok(false);
+    }
+    let inner = inner_rect(area);
+    if !point_in_rect(inner, column, row) {
+        return Ok(false);
+    }
+    let index = (row - inner.y) as usize;
+    if index < app.workspaces.len() {
+        app.set_selected_workspace(index);
+        app.mode = Mode::Navigation;
+        app.clear_status();
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn handle_tabs_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.tabs_area else {
+        return Ok(false);
+    };
+    if app.tab_regions.is_empty() {
+        return Ok(false);
+    }
+    let inner = inner_rect(area);
+    if row != inner.y {
+        return Ok(false);
+    }
+    if column < inner.x || column >= inner.x + inner.width {
+        return Ok(false);
+    }
+    for (idx, (start, end)) in app.tab_regions.iter().enumerate() {
+        if column >= *start && column < *end {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                ws.set_active_tab(idx);
+                app.mode = Mode::Navigation;
+                app.clear_status();
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn handle_terminal_click(app: &mut App, column: u16, row: u16) -> Result<bool> {
+    let Some(area) = app.terminal_area else {
+        return Ok(false);
+    };
+    let inner = inner_rect(area);
+    if point_in_rect(inner, column, row) {
+        if let Some(ws) = app.workspaces.get(app.selected_workspace) {
+            if ws.has_tabs() {
+                app.mode = Mode::TerminalInput;
+                app.clear_status();
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn inner_rect(rect: Rect) -> Rect {
+    Rect {
+        x: rect.x.saturating_add(1),
+        y: rect.y.saturating_add(1),
+        width: rect.width.saturating_sub(2),
+        height: rect.height.saturating_sub(2),
+    }
+}
+
+fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && column >= rect.x
+        && column < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
+}
+
+fn set_add_status(app: &mut App, extra: Option<String>) {
+    if let Some(state) = app.add_state.as_ref() {
+        let mut status = state.status_line(&app.workspace_root);
+        if let Some(extra) = extra {
+            if !extra.is_empty() {
+                status = format!("{extra} | {status}");
+            }
+        }
+        app.set_status(status);
+    }
+}
+
+fn handle_navigation_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Up => {
+            if !app.workspaces.is_empty() {
+                let len = app.workspaces.len();
+                let new_index = if app.selected_workspace == 0 {
+                    len - 1
+                } else {
+                    app.selected_workspace - 1
+                };
+                app.set_selected_workspace(new_index);
+            }
+        }
+        KeyCode::Down => {
+            if !app.workspaces.is_empty() {
+                let len = app.workspaces.len();
+                let new_index = (app.selected_workspace + 1) % len;
+                app.set_selected_workspace(new_index);
+            }
+        }
+        KeyCode::Left => {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                ws.select_prev_tab();
+            }
+        }
+        KeyCode::Right => {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                ws.select_next_tab();
+            }
+        }
+        KeyCode::Char('n') => {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                let size = app.terminal_view_size.unwrap_or(app.terminal_size);
+                ws.spawn_tab(&mut app.next_tab_id, size)?;
+                app.clear_status();
+            }
+        }
+        KeyCode::Char('x') => {
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                ws.close_active_tab()?;
+                app.clear_status();
+            }
+        }
+        KeyCode::Char('i') => {
+            app.toggle_context_panel();
+        }
+        KeyCode::Enter => {
+            if let Some(ws) = app.workspaces.get(app.selected_workspace) {
+                if ws.has_tabs() {
+                    app.mode = Mode::TerminalInput;
+                    app.clear_status();
+                }
+            }
+        }
+        KeyCode::Char('a') => match AddWorktreeState::new(&app.repo_root) {
+            Ok((state, warning)) => {
+                app.mode = Mode::Adding;
+                app.add_state = Some(state);
+                set_add_status(app, warning);
+            }
+            Err(err) => {
+                app.set_status(format!("Failed to prepare add workflow: {err}"));
+            }
+        },
+        KeyCode::Char('p') => {
+            if let Some(ws) = app.workspaces.get(app.selected_workspace) {
+                if ws.is_primary(&app.repo_root) {
+                    app.set_status("Cannot prune the primary worktree.");
+                } else {
+                    app.mode = Mode::Removing;
+                    app.remove_state = Some(super::workspace::RemoveWorktreeState::new(ws.path()));
+                    app.clear_status();
+                }
+            }
+        }
+        KeyCode::Char('?') => {
+            app.mode = Mode::Help;
+            app.clear_status();
+        }
+        KeyCode::Char('c') => {
+            if app.quick_actions.is_empty() {
+                app.set_status("No quick actions configured.");
+            } else {
+                let mut state = app.quick_action_state.take().unwrap_or_default();
+                state.clamp(app.quick_actions.len());
+                app.quick_action_state = Some(state);
+                app.mode = Mode::QuickActions;
+                app.clear_status();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_terminal_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    if key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.mode = Mode::Navigation;
+        return Ok(());
+    }
+
+    if matches!(key.code, KeyCode::Esc) {
+        app.mode = Mode::Navigation;
+        return Ok(());
+    }
+
+    let Some(ws) = app.workspaces.get_mut(app.selected_workspace) else {
+        return Ok(());
+    };
+    let Some(tab) = ws.active_tab_mut() else {
+        return Ok(());
+    };
+    tab.handle_key_event(key)?;
+    Ok(())
+}
+
+fn handle_add_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if let Some(state) = app.add_state.as_mut() {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match state.clear_cache(&app.repo_root) {
+                            Ok(_) => set_add_status(app, Some("Cleared Jira ticket cache.".into())),
+                            Err(err) => set_add_status(
+                                app,
+                                Some(format!("Failed to clear Jira cache: {err}")),
+                            ),
+                        }
+                    } else {
+                        match state.refresh_data(&app.repo_root) {
+                            Ok(count) => set_add_status(
+                                app,
+                                Some(format!("Refreshed Jira tickets ({count})")),
+                            ),
+                            Err(err) => set_add_status(
+                                app,
+                                Some(format!("Failed to refresh Jira tickets: {err}")),
+                            ),
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Char(' ') => {
+                if let Some(state) = app.add_state.as_mut() {
+                    state.toggle_overlay();
+                    set_add_status(app, None);
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app.add_state = None;
+            app.mode = Mode::Navigation;
+        }
+        KeyCode::Enter => {
+            let Some(state) = app.add_state.take() else {
+                app.mode = Mode::Navigation;
+                return Ok(());
+            };
+            let branch_name = state.normalized_branch();
+            if branch_name.is_empty() {
+                set_add_status(app, Some("Branch name is required.".into()));
+                app.add_state = Some(state);
+                return Ok(());
+            }
+            app.workspace_root = ensure_workspace_root(&app.repo_root)?;
+            let dir_name = state.workspace_dir_name();
+            let worktree_path = next_available_workspace_path(&app.workspace_root, &dir_name);
+            let branch_exists = state.branch_exists();
+            let branch_upstream = state.branch_upstream().map(str::to_owned);
+            let result = if branch_exists {
+                git::add_worktree_for_branch(&app.repo_root, &worktree_path, branch_name.as_str())
+            } else if let Some(ref upstream) = branch_upstream {
+                git::add_worktree_from_upstream(
+                    &app.repo_root,
+                    &worktree_path,
+                    branch_name.as_str(),
+                    upstream,
+                )
+            } else {
+                git::add_worktree(&app.repo_root, &worktree_path, Some(branch_name.as_str()))
+            };
+            match result {
+                Ok(_) => {
+                    if branch_exists {
+                        app.set_status(format!(
+                            "Added worktree {} for existing branch {}",
+                            worktree_path.display(),
+                            branch_name
+                        ));
+                    } else {
+                        app.set_status(format!(
+                            "Created worktree {} for new branch {}",
+                            worktree_path.display(),
+                            branch_name
+                        ));
+                    }
+                    app.refresh_worktrees()?;
+                    if let Some(idx) = app.index_of_path(&worktree_path) {
+                        app.set_selected_workspace(idx);
+                    }
+                }
+                Err(err) => {
+                    app.set_status(format!("Failed to create worktree: {err}"));
+                }
+            }
+            app.mode = Mode::Navigation;
+        }
+        KeyCode::Up => {
+            if let Some(state) = app.add_state.as_mut() {
+                state.move_selection_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(state) = app.add_state.as_mut() {
+                state.move_selection_down();
+            }
+        }
+        KeyCode::Tab => {
+            if let Some(state) = app.add_state.as_mut() {
+                if !state.accept_selection() {
+                    set_add_status(app, Some("No suggestion selected.".into()));
+                }
+                set_add_status(app, None);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(state) = app.add_state.as_mut() {
+                state.backspace();
+                set_add_status(app, None);
+            }
+        }
+        KeyCode::Char(c) => {
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            {
+                if let Some(state) = app.add_state.as_mut() {
+                    state.push_char(c);
+                    set_add_status(app, None);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_remove_worktree_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('n') => {
+            app.remove_state = None;
+            app.mode = Mode::Navigation;
+        }
+        KeyCode::Char('f') => {
+            if let Some(state) = app.remove_state.as_mut() {
+                state.toggle_force();
+            }
+        }
+        KeyCode::Char('y') => {
+            let Some(state) = app.remove_state.take() else {
+                app.mode = Mode::Navigation;
+                return Ok(());
+            };
+            match git::remove_worktree(&app.repo_root, state.target(), state.force()) {
+                Ok(_) => {
+                    app.set_status(format!("Removed worktree {}", state.target().display()));
+                    app.refresh_worktrees()?;
+                }
+                Err(err) => {
+                    app.set_status(format!("Failed to remove worktree: {err}"));
+                }
+            }
+            app.mode = Mode::Navigation;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_quick_actions_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    let len = app.quick_actions.len();
+    if len == 0 {
+        app.mode = Mode::Navigation;
+        app.quick_action_state = None;
+        return Ok(());
+    }
+
+    let state = app
+        .quick_action_state
+        .get_or_insert_with(QuickActionState::default);
+    state.clamp(len);
+
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = Mode::Navigation;
+        }
+        KeyCode::Up => {
+            state.move_up(len);
+        }
+        KeyCode::Down => {
+            state.move_down(len);
+        }
+        KeyCode::Enter => {
+            let idx = state.selected.min(len - 1);
+            let action = &app.quick_actions[idx];
+            if let Some(ws) = app.workspaces.get_mut(app.selected_workspace) {
+                let size = app.terminal_view_size.unwrap_or(app.terminal_size);
+                ws.spawn_quick_action_tab(&mut app.next_tab_id, size, action)?;
+                app.clear_status();
+            } else {
+                app.set_status("No workspace selected.");
+            }
+            app.mode = Mode::Navigation;
+        }
+        _ => {}
+    }
+    Ok(())
+}

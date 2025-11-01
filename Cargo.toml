@@ -2,6 +2,14 @@
 name = "wtm"
 version = "0.1.0"
 edition = "2021"
+description = "CLI and TUI tooling for managing Git worktrees from a unified workspace."
+license = "MIT"
+repository = "https://github.com/tefla/wtm-worktree-manager"
+homepage = "https://github.com/tefla/wtm-worktree-manager"
+documentation = "https://github.com/tefla/wtm-worktree-manager#readme"
+readme = "README.md"
+keywords = ["git", "worktree", "cli", "tui"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0"

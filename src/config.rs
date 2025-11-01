@@ -58,3 +58,49 @@ pub fn load_quick_actions(wtm_dir: &Path) -> Result<Vec<QuickAction>> {
 
     Ok(actions)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_quick_actions_missing_file_returns_empty() {
+        let dir = tempdir().unwrap();
+        let actions = load_quick_actions(dir.path()).unwrap();
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn load_quick_actions_filters_and_formats_entries() {
+        let dir = tempdir().unwrap();
+        let config = r#"
+        {
+            "quickAccess": [
+                {
+                    "label": " Deploy ",
+                    "quickCommand": "deploy.sh",
+                    "type": "command"
+                },
+                {
+                    "quickCommand": "status.sh",
+                    "type": "command"
+                },
+                {
+                    "label": "Not a command",
+                    "quickCommand": "noop",
+                    "type": "link"
+                }
+            ]
+        }
+        "#;
+        std::fs::write(dir.path().join("config.json"), config).unwrap();
+
+        let actions = load_quick_actions(dir.path()).unwrap();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].label, "Deploy");
+        assert_eq!(actions[0].command, "deploy.sh");
+        assert_eq!(actions[1].label, "status.sh");
+        assert_eq!(actions[1].command, "status.sh");
+    }
+}
