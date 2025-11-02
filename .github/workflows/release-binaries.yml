@@ -21,6 +21,8 @@ jobs:
   build-and-upload:
     name: build-${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    outputs:
+      tag_name: ${{ steps.release_meta.outputs.tag_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,12 +37,22 @@ jobs:
             target: aarch64-apple-darwin
             platform: macos-arm64
 
-    env:
-      TAG_NAME: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || format('test-{0}', github.sha) }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Determine tag
+        id: release_meta
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="test-${GITHUB_SHA}"
+          fi
+          echo "TAG_NAME=$tag" >> "$GITHUB_ENV"
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -81,7 +93,7 @@ jobs:
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.TAG_NAME }}
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
           files: |
             ${{ steps.prep.outputs.archive }}
             ${{ steps.prep.outputs.archive }}.sha256
@@ -92,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     if: (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && secrets.HOMEBREW_TAP_PAT != ''
     env:
-      TAG_NAME: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || format('test-{0}', github.sha) }}
+      TAG_NAME: ${{ needs.build-and-upload.outputs.tag_name }}
       GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
       GIT_AUTHOR_NAME: wtm-release-bot
       GIT_AUTHOR_EMAIL: releases@wtm
