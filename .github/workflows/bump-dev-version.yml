@@ -30,18 +30,18 @@ jobs:
           set -euo pipefail
           current="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wtm") | .version')"
           new_version="$(CURRENT_VERSION="$current" python3 <<'PY'
-import os
-current = os.environ["CURRENT_VERSION"]
-base = current.split("-dev")[0]
-parts = base.split(".")
-if len(parts) != 3:
-    raise SystemExit(f"Unexpected version format: {current}")
-major, minor, patch = map(int, parts)
-patch += 1
-new_version = f"{major}.{minor}.{patch}-dev"
-print(new_version, end="")
-PY
-)"
+          import os
+          current = os.environ["CURRENT_VERSION"]
+          base = current.split("-dev")[0]
+          parts = base.split(".")
+          if len(parts) != 3:
+              raise SystemExit(f"Unexpected version format: {current}")
+          major, minor, patch = map(int, parts)
+          patch += 1
+          new_version = f"{major}.{minor}.{patch}-dev"
+          print(new_version, end="")
+          PY
+          )"
           if [ "$new_version" = "$current" ]; then
             echo "updated=false" >> "$GITHUB_OUTPUT"
             exit 0
