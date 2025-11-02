@@ -965,7 +965,8 @@ impl AddWorktreeState {
     }
 
     fn push_char(&mut self, c: char) {
-        self.branch.push(c);
+        let mapped = if c == ' ' { '-' } else { c };
+        self.branch.push(mapped);
     }
 
     fn branch_display(&self) -> &str {
