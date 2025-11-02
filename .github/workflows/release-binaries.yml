@@ -4,6 +4,12 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (release must already exist)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,7 +33,7 @@ jobs:
             platform: macos-arm64
 
     env:
-      TAG_NAME: ${{ github.event.release.tag_name }}
+      TAG_NAME: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
 
     steps:
       - name: Checkout
@@ -71,6 +77,7 @@ jobs:
       - name: Upload release asset
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.TAG_NAME }}
           files: |
             ${{ steps.prep.outputs.archive }}
             ${{ steps.prep.outputs.archive }}.sha256
@@ -81,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ secrets.HOMEBREW_TAP_PAT != '' }}
     env:
-      TAG_NAME: ${{ github.event.release.tag_name }}
+      TAG_NAME: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
       GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
       GIT_AUTHOR_NAME: wtm-release-bot
       GIT_AUTHOR_EMAIL: releases@wtm
