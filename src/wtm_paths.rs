@@ -15,15 +15,25 @@ pub fn ensure_workspace_root(repo_root: &Path) -> std::io::Result<PathBuf> {
     Ok(root)
 }
 
-/// Generate a filesystem-safe directory name for the provided branch.
-pub fn branch_dir_name(branch: &str) -> String {
+/// Normalise a raw branch/workspace name into a safe slug.
+pub fn sanitize_branch_name(branch: &str) -> String {
     let mut slug: String = branch
+        .trim()
         .chars()
         .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '/' => c,
             _ => '-',
         })
         .collect();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
+}
+
+/// Generate a filesystem-safe directory name for the provided branch.
+pub fn branch_dir_name(branch: &str) -> String {
+    let mut slug = sanitize_branch_name(branch).replace('/', "-");
     while slug.contains("--") {
         slug = slug.replace("--", "-");
     }
@@ -59,6 +69,25 @@ mod tests {
     fn branch_dir_name_preserves_hyphen_and_underscore() {
         assert_eq!(branch_dir_name("feature-branch"), "feature-branch");
         assert_eq!(branch_dir_name("feature_branch"), "feature_branch");
+    }
+
+    #[test]
+    fn branch_dir_name_replaces_slashes() {
+        assert_eq!(branch_dir_name("feature/branch"), "feature-branch");
+    }
+
+    #[test]
+    fn sanitize_branch_name_replaces_spaces_with_hyphens() {
+        assert_eq!(sanitize_branch_name("feature branch"), "feature-branch");
+        assert_eq!(
+            sanitize_branch_name("  feature   branch  "),
+            "feature-branch"
+        );
+    }
+
+    #[test]
+    fn sanitize_branch_name_preserves_slashes() {
+        assert_eq!(sanitize_branch_name("feature/branch"), "feature/branch");
     }
 
     #[test]

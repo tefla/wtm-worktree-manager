@@ -116,6 +116,37 @@ fn worktree_add_and_remove_roundtrip() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+#[test]
+fn worktree_add_sanitizes_branch_name() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    init_git_repo(temp.path())?;
+
+    let original_branch = "feature branch";
+    let sanitized_branch = "feature-branch";
+    let expected_dir = temp
+        .path()
+        .join(".wtm/workspaces")
+        .join(branch_dir_name(sanitized_branch));
+
+    let mut add = Command::new(assert_cmd::cargo::cargo_bin!("wtm"));
+    add.current_dir(temp.path())
+        .args(["worktree", "add", original_branch]);
+    add.assert().success();
+
+    assert!(expected_dir.exists());
+    run_git(
+        temp.path(),
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/feature-branch",
+        ],
+    )?;
+
+    Ok(())
+}
+
 fn read_json(path: &Path) -> Result<Value, Box<dyn std::error::Error>> {
     let data = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&data)?)

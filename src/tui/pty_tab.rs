@@ -12,6 +12,8 @@ use std::{
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, RefreshKind, System};
 use tui_term::vt100;
 
+const DEFAULT_SCROLLBACK_LINES: usize = 5000;
+
 pub(super) struct PtyTab {
     base_title: String,
     title: Arc<RwLock<String>>,
@@ -37,6 +39,7 @@ impl PtyTab {
 
         let mut command = CommandBuilder::new(default_shell());
         command.cwd(cwd);
+        command.env("PWD", cwd);
 
         let child = pair
             .slave
@@ -52,7 +55,11 @@ impl PtyTab {
             .context("failed to acquire pty writer")?;
         let writer = Arc::new(Mutex::new(writer));
 
-        let parser = Arc::new(RwLock::new(vt100::Parser::new(size.rows, size.cols, 0)));
+        let parser = Arc::new(RwLock::new(vt100::Parser::new(
+            size.rows,
+            size.cols,
+            DEFAULT_SCROLLBACK_LINES,
+        )));
 
         let parser_clone = parser.clone();
         let exit_status = Arc::new(Mutex::new(None));
@@ -119,6 +126,7 @@ impl PtyTab {
 
     pub fn handle_key_event(&self, key: KeyEvent) -> Result<()> {
         if let Some(bytes) = key_event_to_bytes(key) {
+            self.reset_scrollback();
             let mut writer = self.writer.lock().unwrap();
             writer.write_all(&bytes)?;
             writer.flush()?;
@@ -126,7 +134,29 @@ impl PtyTab {
         Ok(())
     }
 
+    pub fn scroll_scrollback(&self, lines: isize) {
+        if lines == 0 {
+            return;
+        }
+        if let Ok(mut parser) = self.parser.write() {
+            let current = parser.screen().scrollback();
+            let new_offset = if lines > 0 {
+                current.saturating_add(lines as usize)
+            } else {
+                current.saturating_sub((-lines) as usize)
+            };
+            parser.set_scrollback(new_offset);
+        }
+    }
+
+    pub fn reset_scrollback(&self) {
+        if let Ok(mut parser) = self.parser.write() {
+            parser.set_scrollback(0);
+        }
+    }
+
     pub fn send_command(&self, command: &str) -> Result<()> {
+        self.reset_scrollback();
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(command.as_bytes())?;
         writer.write_all(b"\r\n")?;
@@ -402,9 +432,55 @@ pub fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{self, Write},
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Default, Clone)]
+    struct RecordingWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl RecordingWriter {
+        fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let writer = Self::default();
+            (writer.clone(), writer.buffer.clone())
+        }
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut guard = self.buffer.lock().unwrap();
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn default_shell_is_not_empty() {
         assert!(!default_shell().is_empty());
+    }
+
+    #[test]
+    fn respond_with_cursor_writes_position_sequence() {
+        let parser = Arc::new(RwLock::new(vt100::Parser::new(24, 80, 0)));
+        {
+            let mut guard = parser.write().unwrap();
+            guard.process(b"\x1b[10;20H");
+        }
+
+        let (writer_impl, buffer) = RecordingWriter::new();
+        let writer: Box<dyn Write + Send> = Box::new(writer_impl);
+        let writer = Arc::new(Mutex::new(writer));
+
+        respond_with_cursor(&parser, &writer);
+
+        let recorded = buffer.lock().unwrap().clone();
+        assert_eq!(recorded, b"\x1b[10;20R");
     }
 }

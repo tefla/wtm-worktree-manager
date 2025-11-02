@@ -1,6 +1,8 @@
 mod commands;
 mod config;
+mod docker;
 mod git;
+mod jira;
 mod tui;
 mod wtm_paths;
 
@@ -9,7 +11,9 @@ use clap::{Parser, Subcommand};
 use commands::init::init_command;
 use git::{add_worktree, find_repo_root, list_worktrees, remove_worktree};
 use std::path::PathBuf;
-use wtm_paths::{branch_dir_name, ensure_workspace_root, next_available_workspace_path};
+use wtm_paths::{
+    branch_dir_name, ensure_workspace_root, next_available_workspace_path, sanitize_branch_name,
+};
 
 /// WTM command line interface.
 #[derive(Parser, Debug)]
@@ -124,6 +128,10 @@ fn run_worktree_cli(command: WorktreeCommands) -> Result<()> {
             Ok(())
         }
         WorktreeCommands::Add { branch } => {
+            let branch = sanitize_branch_name(&branch);
+            if branch.is_empty() {
+                bail!("Branch name is required.");
+            }
             let workspace_root = ensure_workspace_root(&repo_root)?;
             let dir_name = branch_dir_name(&branch);
             let worktree_path = next_available_workspace_path(&workspace_root, &dir_name);
