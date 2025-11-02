@@ -14,6 +14,9 @@ working across branches without leaving the keyboard.
 - **TUI dashboard:** `wtm` without arguments launches an interactive dashboard
   showing worktrees, embedded terminals, quick actions, and Jira ticket
   suggestions.
+- **GUI dashboard (experimental):** `wtm gui` launches a desktop interface for
+  managing worktrees, opening embedded PTY-backed terminal tabs, and triggering
+  quick actions with the mouse.
 - **Jira integration:** Suggestions within the add-worktree flow are fetched via
   the Atlassian CLI (`acli`), cached locally, and converted into branch-friendly
   slugs.
@@ -25,10 +28,27 @@ cargo install --path .            # install locally
 wtm init /path/to/repository      # bootstrap .wtm scaffold
 wtm worktree add feature/foo      # create a new worktree
 wtm                               # launch the dashboard
+wtm gui                           # launch the experimental desktop GUI
 ```
 
 The TUI expects the Atlassian CLI (`acli`) to be installed and authenticated when
 fetching Jira issues.
+
+## GUI Frontend (Experimental)
+
+The GUI provides a mouse-friendly interface backed by the same Git helpers as
+the TUI:
+
+- Lists existing worktrees with branch/head status.
+- Opens PTY-backed terminal tabs per worktree (multiple tabs supported,
+  including scrollback and keyboard input).
+- Adds worktrees for new branches (mirrors `wtm worktree add`).
+- Removes worktrees with an opt-in force toggle.
+- Launches configured quick actions inside the repository root.
+
+Run `wtm gui` inside a repository that already has `.wtm` initialised. The GUI
+is implemented with `egui`/`eframe`; GPU drivers that satisfy `wgpu` are
+required.
 
 ## Workspace Layout
 

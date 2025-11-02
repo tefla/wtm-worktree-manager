@@ -138,22 +138,24 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
 
     frame.render_widget(tabs, chunks[0]);
 
-    app.terminal_view_size = Some(super::TerminalSize::from_rect(chunks[1]));
+    let terminal_block = Block::default().borders(Borders::ALL);
+    let terminal_area = terminal_block.inner(chunks[1]);
+    let terminal_size = super::TerminalSize::from_rect(terminal_area);
+    app.terminal_view_size = Some(terminal_size);
 
     if let Some(tab) = workspace.active_tab_mut() {
-        let area_size = super::TerminalSize::from_rect(chunks[1]);
-        tab.resize_to(area_size);
+        tab.resize_to(terminal_size);
         let parser = tab.parser_handle();
         let screen_guard = parser.read().expect("terminal parser poisoned");
         let cursor = Cursor::default().visibility(matches!(app.mode, Mode::TerminalInput));
         let terminal_widget = PseudoTerminal::new(screen_guard.screen())
-            .block(Block::default().borders(Borders::ALL))
+            .block(terminal_block.clone())
             .cursor(cursor);
         frame.render_widget(terminal_widget, chunks[1]);
     } else {
         frame.render_widget(
             Paragraph::new("No tabs open. Press `n` to create one.")
-                .block(Block::default().borders(Borders::ALL)),
+                .block(terminal_block.clone()),
             chunks[1],
         );
     }

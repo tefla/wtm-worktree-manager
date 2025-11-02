@@ -1,7 +1,7 @@
 mod app;
 mod keymap;
-mod pty_tab;
-mod size;
+pub(crate) mod pty_tab;
+pub(crate) mod size;
 
 use anyhow::Result;
 use crossterm::{

@@ -26,8 +26,13 @@ tui-term = { version = "0.2", features = ["vt100"] }
 portable-pty = "0.9"
 sysinfo = "0.30"
 tachyonfx = { version = "0.11", optional = true, default-features = false, features = ["crossterm", "std-duration"] }
+eframe = { version = "0.27", default-features = false, features = ["wgpu", "default_fonts"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.10"
+vt100 = "0.15.2"
+
+[patch.crates-io]
+vt100 = { path = "crates/vt100" }
