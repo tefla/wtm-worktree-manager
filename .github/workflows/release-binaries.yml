@@ -41,18 +41,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Determine tag
+      - name: Set tag from release
+        if: github.event_name == 'release'
+        run: echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Set tag from manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "TAG_NAME=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
+
+      - name: Set tag for development push
+        if: github.event_name == 'push'
+        run: echo "TAG_NAME=test-${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Export tag metadata
         id: release_meta
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            tag="${GITHUB_REF_NAME}"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ github.event.inputs.tag }}"
-          else
-            tag="test-${GITHUB_SHA}"
-          fi
-          echo "TAG_NAME=$tag" >> "$GITHUB_ENV"
-          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+        run: echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
