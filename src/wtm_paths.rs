@@ -50,3 +50,20 @@ pub fn next_available_workspace_path(root: &Path, base_name: &str) -> PathBuf {
         counter += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_dir_name_preserves_hyphen_and_underscore() {
+        assert_eq!(branch_dir_name("feature-branch"), "feature-branch");
+        assert_eq!(branch_dir_name("feature_branch"), "feature_branch");
+    }
+
+    #[test]
+    fn branch_dir_name_replaces_spaces_with_single_hyphen() {
+        assert_eq!(branch_dir_name("feature branch"), "feature-branch");
+        assert_eq!(branch_dir_name("feature  branch"), "feature-branch");
+    }
+}
