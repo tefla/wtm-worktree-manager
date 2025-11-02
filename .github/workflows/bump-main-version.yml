@@ -1,0 +1,72 @@
+name: Bump Release Version
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    if: github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install cargo-edit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+
+      - name: Compute next release version
+        id: compute
+        run: |
+          set -euo pipefail
+          current="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wtm") | .version')"
+          base="${current%%-dev*}"
+          new_version="$(BASE_VERSION="$base" python3 <<'PY'
+import os
+base = os.environ["BASE_VERSION"]
+parts = base.split(".")
+if len(parts) != 3:
+    raise SystemExit(f"Unexpected version format: {base}")
+major, minor, patch = map(int, parts)
+minor += 1
+new_version = f"{major}.{minor}.0"
+print(new_version, end="")
+PY
+)"
+          if [ "$new_version" = "$base" ]; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current_version=$current" >> "$GITHUB_OUTPUT"
+          echo "base_version=$base" >> "$GITHUB_OUTPUT"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update Cargo.toml
+        if: steps.compute.outputs.updated == 'true'
+        run: cargo set-version "${{ steps.compute.outputs.new_version }}" --manifest-path Cargo.toml
+
+      - name: Commit changes
+        if: steps.compute.outputs.updated == 'true'
+        run: |
+          git config user.name "wtm-release-bot"
+          git config user.email "releases@wtm"
+          git add Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo "No version changes detected."
+            exit 0
+          fi
+          git commit -m "chore: bump release version to ${{ steps.compute.outputs.new_version }}"
+
+      - name: Push commit
+        if: steps.compute.outputs.updated == 'true'
+        run: git push origin HEAD

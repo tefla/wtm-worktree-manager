@@ -1,0 +1,77 @@
+name: Test Release Build
+
+on:
+  push:
+    branches:
+      - development
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-matrix:
+    name: dry-run-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform: macos-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+
+    env:
+      TAG_NAME: test-${{ github.sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev libudev-dev
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Prepare archive
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          archive_name="wtm-${version}-${{ matrix.platform }}.tar.gz"
+          staging="$(mktemp -d)"
+          cp "target/${{ matrix.target }}/release/wtm" "$staging/"
+          [[ -f README.md ]] && cp README.md "$staging/"
+          [[ -f LICENSE ]] && cp LICENSE "$staging/"
+          tar -C "$staging" -czf "$archive_name" .
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$archive_name" >> "${archive_name}.sha256"
+          else
+            sha256sum "$archive_name" >> "${archive_name}.sha256"
+          fi
+          echo "ARCHIVE=$archive_name" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
