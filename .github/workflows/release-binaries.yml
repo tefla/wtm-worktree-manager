@@ -46,12 +46,12 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           tag="$(python - <<'PY'
-import json, os
-with open(os.environ['GITHUB_EVENT_PATH'], 'r', encoding='utf-8') as f:
-    data = json.load(f)
-print(data.get('inputs', {}).get('tag', ''), end='')
-PY
-)"
+          import json, os
+          with open(os.environ['GITHUB_EVENT_PATH'], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          print(data.get('inputs', {}).get('tag', ''), end='')
+          PY
+          )"
           if [ -z "$tag" ]; then
             echo "Manual dispatch requires an input tag" >&2
             exit 1

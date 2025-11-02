@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   version:
-    if: github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    if: ${{ github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,17 +31,17 @@ jobs:
           current="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wtm") | .version')"
           base="${current%%-dev*}"
           new_version="$(BASE_VERSION="$base" python3 <<'PY'
-import os
-base = os.environ["BASE_VERSION"]
-parts = base.split(".")
-if len(parts) != 3:
-    raise SystemExit(f"Unexpected version format: {base}")
-major, minor, patch = map(int, parts)
-minor += 1
-new_version = f"{major}.{minor}.0"
-print(new_version, end="")
-PY
-)"
+          import os
+          base = os.environ["BASE_VERSION"]
+          parts = base.split(".")
+          if len(parts) != 3:
+              raise SystemExit(f"Unexpected version format: {base}")
+          major, minor, patch = map(int, parts)
+          minor += 1
+          new_version = f"{major}.{minor}.0"
+          print(new_version, end="")
+          PY
+          )"
           if [ "$new_version" = "$base" ]; then
             echo "updated=false" >> "$GITHUB_OUTPUT"
             exit 0
