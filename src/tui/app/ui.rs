@@ -6,7 +6,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Tabs, Wrap,
+    },
     Frame,
 };
 use tui_term::widget::{Cursor, PseudoTerminal};
@@ -139,24 +142,65 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(tabs, chunks[0]);
 
     let terminal_block = Block::default().borders(Borders::ALL);
-    let terminal_area = terminal_block.inner(chunks[1]);
-    let terminal_size = super::TerminalSize::from_rect(terminal_area);
-    app.terminal_view_size = Some(terminal_size);
+    frame.render_widget(terminal_block.clone(), chunks[1]);
+
+    let mut terminal_inner = terminal_block.inner(chunks[1]);
+    let mut scrollbar_area = None;
+    let terminal_size = if terminal_inner.width > 0 && terminal_inner.height > 0 {
+        if terminal_inner.width > 1 {
+            scrollbar_area = Some(Rect {
+                x: terminal_inner.x + terminal_inner.width - 1,
+                y: terminal_inner.y,
+                width: 1,
+                height: terminal_inner.height,
+            });
+            terminal_inner.width -= 1;
+        }
+        if let Some(area) = scrollbar_area {
+            if area.width > 0 && area.height > 0 {
+                frame.render_widget(Clear, area);
+            }
+        }
+        let size = super::TerminalSize::from_rect(terminal_inner);
+        app.terminal_view_size = Some(size);
+        Some(size)
+    } else {
+        app.terminal_view_size = None;
+        None
+    };
 
     if let Some(tab) = workspace.active_tab_mut() {
-        tab.resize_to(terminal_size);
-        let parser = tab.parser_handle();
-        let screen_guard = parser.read().expect("terminal parser poisoned");
-        let cursor = Cursor::default().visibility(matches!(app.mode, Mode::TerminalInput));
-        let terminal_widget = PseudoTerminal::new(screen_guard.screen())
-            .block(terminal_block.clone())
-            .cursor(cursor);
-        frame.render_widget(terminal_widget, chunks[1]);
-    } else {
+        if let Some(size) = terminal_size {
+            tab.resize_to(size);
+            let parser = tab.parser_handle();
+            let screen_guard = parser.read().expect("terminal parser poisoned");
+            let cursor = Cursor::default().visibility(matches!(app.mode, Mode::TerminalInput));
+            let terminal_widget = PseudoTerminal::new(screen_guard.screen()).cursor(cursor);
+            frame.render_widget(terminal_widget, terminal_inner);
+
+            if let Some(area) = scrollbar_area {
+                if area.height > 0 && size.rows > 0 {
+                    let screen = screen_guard.screen();
+                    let history_len = screen.scrollback_buffer_len();
+                    let viewport = usize::from(size.rows);
+                    let total_rows = history_len + viewport;
+                    if total_rows > viewport {
+                        let offset = screen.scrollback();
+                        let max_position = total_rows.saturating_sub(viewport);
+                        let top_position = history_len.saturating_sub(offset).min(max_position);
+                        let mut scrollbar_state = ScrollbarState::new(total_rows)
+                            .position(top_position)
+                            .viewport_content_length(viewport);
+                        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+                        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+                    }
+                }
+            }
+        }
+    } else if terminal_inner.width > 0 && terminal_inner.height > 0 {
         frame.render_widget(
-            Paragraph::new("No tabs open. Press `n` to create one.")
-                .block(terminal_block.clone()),
-            chunks[1],
+            Paragraph::new("No tabs open. Press `n` to create one."),
+            terminal_inner,
         );
     }
 

@@ -134,6 +134,12 @@ impl Screen {
         self.grid().scrollback()
     }
 
+    /// Returns the number of scrollback rows currently retained.
+    #[must_use]
+    pub fn scrollback_buffer_len(&self) -> usize {
+        self.grid().scrollback_buffer_len()
+    }
+
     pub(crate) fn set_scrollback(&mut self, rows: usize) {
         self.grid_mut().set_scrollback(rows);
     }

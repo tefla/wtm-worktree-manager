@@ -180,6 +180,10 @@ impl Grid {
         self.scrollback_len
     }
 
+    pub fn scrollback_buffer_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
     pub fn scrollback(&self) -> usize {
         self.scrollback_offset
     }
