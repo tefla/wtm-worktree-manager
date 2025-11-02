@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           current="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wtm") | .version')"
-          new_version="$(CURRENT_VERSION="$current" python <<'PY'
+          new_version="$(CURRENT_VERSION="$current" python3 <<'PY'
 import os
 current = os.environ["CURRENT_VERSION"]
 base = current.split("-dev")[0]
