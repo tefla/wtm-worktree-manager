@@ -1,6 +1,6 @@
 [package]
 name = "wtm"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "CLI and TUI tooling for managing Git worktrees from a unified workspace."
 license = "MIT"
@@ -26,7 +26,7 @@ tui-term = { version = "0.2", features = ["vt100"] }
 portable-pty = "0.9"
 sysinfo = "0.30"
 tachyonfx = { version = "0.11", optional = true, default-features = false, features = ["crossterm", "std-duration"] }
-eframe = { version = "0.27", default-features = false, features = ["wgpu", "default_fonts"] }
+eframe = { version = "0.27", default-features = false, features = ["wgpu", "default_fonts", "x11"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

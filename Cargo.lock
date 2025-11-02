@@ -167,6 +167,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
+name = "as-raw-xcb-connection"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
+
+[[package]]
 name = "ash"
 version = "0.37.3+1.3.251"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -851,6 +857,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "egui_glow",
  "image",
  "js-sys",
  "log",
@@ -913,6 +920,22 @@ dependencies = [
  "smithay-clipboard",
  "web-time",
  "webbrowser",
+ "winit",
+]
+
+[[package]]
+name = "egui_glow"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0e5d975f3c86edc3d35b1db88bb27c15dde7c55d3b5af164968ab5ede3f44ca"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "glow",
+ "log",
+ "memoffset",
+ "wasm-bindgen",
+ "web-sys",
  "winit",
 ]
 
@@ -1600,6 +1623,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
@@ -3496,6 +3528,7 @@ dependencies = [
  "android-activity",
  "atomic-waker",
  "bitflags 2.10.0",
+ "bytemuck",
  "calloop 0.12.4",
  "cfg_aliases",
  "core-foundation",
@@ -3510,6 +3543,7 @@ dependencies = [
  "objc2 0.4.1",
  "once_cell",
  "orbclient",
+ "percent-encoding",
  "raw-window-handle 0.6.2",
  "redox_syscall 0.3.5",
  "rustix 0.38.44",
@@ -3520,6 +3554,8 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows-sys 0.48.0",
+ "x11-dl",
+ "x11rb",
  "xkbcommon-dl",
 ]
 
@@ -3555,7 +3591,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "wtm"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3575,12 +3611,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "x11-dl"
+version = "2.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38735924fedd5314a6e548792904ed8c6de6636285cb9fec04d5b1db85c1516f"
+dependencies = [
+ "libc",
+ "once_cell",
+ "pkg-config",
+]
+
+[[package]]
 name = "x11rb"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
 dependencies = [
+ "as-raw-xcb-connection",
  "gethostname",
+ "libc",
+ "libloading 0.8.9",
+ "once_cell",
  "rustix 1.1.2",
  "x11rb-protocol",
 ]

@@ -1,0 +1,153 @@
+name: Release Binaries
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (release must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: build-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    outputs:
+      tag_name: ${{ steps.release_meta.outputs.tag_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform: macos-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set tag from release
+        if: github.event_name == 'release'
+        run: echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Set tag from manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          tag="$(python - <<'PY'
+          import json, os
+          with open(os.environ['GITHUB_EVENT_PATH'], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          print(data.get('inputs', {}).get('tag', ''), end='')
+          PY
+          )"
+          if [ -z "$tag" ]; then
+            echo "Manual dispatch requires an input tag" >&2
+            exit 1
+          fi
+          echo "TAG_NAME=$tag" >> "$GITHUB_ENV"
+
+      - name: Set tag for development push
+        if: github.event_name == 'push'
+        run: echo "TAG_NAME=test-${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Export tag metadata
+        id: release_meta
+        run: echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev libudev-dev
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Prepare archive
+        id: prep
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          archive_name="wtm-${version}-${{ matrix.platform }}.tar.gz"
+          staging="$(mktemp -d)"
+          cp "target/${{ matrix.target }}/release/wtm" "$staging/"
+          [[ -f README.md ]] && cp README.md "$staging/"
+          [[ -f LICENSE ]] && cp LICENSE "$staging/"
+          tar -C "$staging" -czf "$archive_name" .
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$archive_name" >> "${archive_name}.sha256"
+          else
+            sha256sum "$archive_name" >> "${archive_name}.sha256"
+          fi
+          echo "archive=$archive_name" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Upload release asset
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          files: |
+            ${{ steps.prep.outputs.archive }}
+            ${{ steps.prep.outputs.archive }}.sha256
+
+  update-homebrew:
+    name: update-homebrew-tap
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && secrets.HOMEBREW_TAP_PAT != ''
+    env:
+      TAG_NAME: ${{ needs.build-and-upload.outputs.tag_name }}
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
+      GIT_AUTHOR_NAME: wtm-release-bot
+      GIT_AUTHOR_EMAIL: releases@wtm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Update Homebrew tap
+        run: scripts/update-homebrew-tap.sh "$TAG_NAME"
+
+  publish-crates-io:
+    name: publish-crates-io
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.release.prerelease == false && secrets.CRATESIO_TOKEN != ''
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATESIO_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Verify tag matches crate version
+        run: |
+          manifest_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wtm") | .version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$manifest_version" != "$tag" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match crate version ${manifest_version}" >&2
+            exit 1
+          fi
+      - name: Publish to crates.io
+        run: cargo publish --locked
