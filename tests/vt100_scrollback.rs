@@ -1,3 +1,11 @@
+fn scrollback_buffer_len(parser: &mut vt100::Parser) -> usize {
+    let original_offset = parser.screen().scrollback();
+    parser.set_scrollback(usize::MAX);
+    let available_rows = parser.screen().scrollback();
+    parser.set_scrollback(original_offset);
+    available_rows
+}
+
 #[test]
 fn vt100_scrollback_handles_large_offsets_without_panicking() {
     let mut parser = vt100::Parser::new(24, 80, 5_000);
@@ -25,8 +33,7 @@ fn vt100_scrollback_buffer_len_matches_excess_rows() {
     }
     parser.process(data.as_bytes());
 
-    let screen = parser.screen();
-    let buffer_len = screen.scrollback_buffer_len();
+    let buffer_len = scrollback_buffer_len(&mut parser);
     assert!(
         buffer_len >= extra && buffer_len <= rows,
         "expected scrollback between {extra} and {rows}, got {buffer_len}"
@@ -44,6 +51,5 @@ fn vt100_scrollback_buffer_len_clamps_to_limit() {
     }
     parser.process(data.as_bytes());
 
-    let screen = parser.screen();
-    assert_eq!(screen.scrollback_buffer_len(), scrollback_limit);
+    assert_eq!(scrollback_buffer_len(&mut parser), scrollback_limit);
 }
