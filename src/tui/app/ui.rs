@@ -173,18 +173,21 @@ fn draw_main(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
         if let Some(size) = terminal_size {
             tab.resize_to(size);
             let parser = tab.parser_handle();
-            let screen_guard = parser.read().expect("terminal parser poisoned");
-            let cursor = Cursor::default().visibility(matches!(app.mode, Mode::TerminalInput));
-            let terminal_widget = PseudoTerminal::new(screen_guard.screen()).cursor(cursor);
-            frame.render_widget(terminal_widget, terminal_inner);
+            let mut parser_guard = parser.write().expect("terminal parser poisoned");
+            {
+                let screen = parser_guard.screen();
+                let cursor = Cursor::default().visibility(matches!(app.mode, Mode::TerminalInput));
+                let terminal_widget = PseudoTerminal::new(screen).cursor(cursor);
+                frame.render_widget(terminal_widget, terminal_inner);
+            }
 
             if let Some(area) = scrollbar_area {
                 if area.height > 0 && size.rows > 0 {
-                    let screen = screen_guard.screen();
-                    let history_len = screen.scrollback_buffer_len();
+                    let history_len = scrollback_buffer_len(&mut *parser_guard);
                     let viewport = usize::from(size.rows);
                     let total_rows = history_len + viewport;
                     if total_rows > viewport {
+                        let screen = parser_guard.screen();
                         let offset = screen.scrollback();
                         let max_position = total_rows.saturating_sub(viewport);
                         let top_position = history_len.saturating_sub(offset).min(max_position);
@@ -338,6 +341,14 @@ fn draw_status(app: &mut App, frame: &mut Frame<'_>, area: Rect) {
 
     #[cfg(feature = "fx")]
     app.render_status_fx(frame, area);
+}
+
+fn scrollback_buffer_len(parser: &mut tui_term::vt100::Parser) -> usize {
+    let original_offset = parser.screen().scrollback();
+    parser.set_scrollback(usize::MAX);
+    let available_rows = parser.screen().scrollback();
+    parser.set_scrollback(original_offset);
+    available_rows
 }
 
 fn render_add_worktree_overlay(frame: &mut Frame<'_>, area: Rect, state: &AddWorktreeState) {
