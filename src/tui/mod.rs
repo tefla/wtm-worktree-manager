@@ -31,7 +31,7 @@ pub fn run_tui(
         TerminalSize::from_size(size),
     )?;
 
-    let tick_rate = Duration::from_millis(100);
+    let tick_rate = Duration::from_millis(5);
 
     let result = (|| -> Result<()> {
         loop {
