@@ -118,6 +118,22 @@ pub fn add_worktree_from_upstream(
     run_git(args, repo_root).map(|_| ())
 }
 
+/// Move an existing worktree via `git worktree move`.
+pub fn move_worktree(
+    repo_root: &Path,
+    source: &Path,
+    destination: &Path,
+    force: bool,
+) -> Result<()> {
+    let mut args: Vec<String> = vec!["worktree".into(), "move".into()];
+    if force {
+        args.push("--force".into());
+    }
+    args.push(source.to_string_lossy().into_owned());
+    args.push(destination.to_string_lossy().into_owned());
+    run_git(args, repo_root).map(|_| ())
+}
+
 /// Remove an existing worktree via `git worktree remove`.
 pub fn remove_worktree(repo_root: &Path, path: &Path, force: bool) -> Result<()> {
     let mut args: Vec<String> = vec!["worktree".into(), "remove".into()];
