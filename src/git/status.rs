@@ -1,8 +1,9 @@
 use super::run_git;
 use anyhow::Result;
+use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct GitStatusSummary {
     pub branch: Option<String>,
     pub upstream: Option<String>,
